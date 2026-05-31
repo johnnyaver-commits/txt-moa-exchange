@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f4ef;
+  --foreground: #211f1d;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.panel {
+  border: 1px solid #e1d7cc;
+  border-radius: 8px;
+  background: #fffaf4;
+  padding: 18px;
+  box-shadow: 0 14px 40px rgba(70, 52, 35, 0.08);
+}
+
+.post-card {
+  overflow: hidden;
+  border: 1px solid #e1d7cc;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 14px 40px rgba(70, 52, 35, 0.08);
+}
+
+.section-title {
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.page-title {
+  font-size: clamp(1.6rem, 4vw, 2.35rem);
+  font-weight: 950;
+  line-height: 1.08;
+}
+
+.nav-button,
+.action-button,
+.secondary-button,
+.mini-button,
+.filter-row,
+.chat-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  transition: 160ms ease;
+}
+
+.nav-button {
+  padding: 10px 12px;
+  color: #5f5750;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.nav-button:hover,
+.nav-button-active {
+  background: #222;
+  color: white;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 8px;
+  background: #f0e8dd;
+  transition: 160ms ease;
+}
+
+.icon-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button,
+.hero-button {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 8px;
+  background: #222;
+  padding: 0 18px;
+  color: white;
+  font-weight: 900;
+}
+
+.hero-button {
+  background: #9ed0bd;
+  color: #17221d;
+}
+
+.hero-button-muted {
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+}
+
+.secondary-button {
+  min-height: 42px;
+  border: 1px solid #d8ccc0;
+  background: white;
+  padding: 0 12px;
+  font-weight: 850;
+}
+
+.mini-button {
+  min-height: 34px;
+  background: #222;
+  padding: 0 11px;
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.field,
+.select-shell,
+.input-shell {
+  min-height: 46px;
+  border: 1px solid #d8ccc0;
+  border-radius: 8px;
+  background: white;
+  color: #211f1d;
+  outline: none;
+}
+
+.field,
+.select-shell {
+  width: 100%;
+  padding: 11px 13px;
+}
+
+.input-shell {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+}
+
+.input-shell input {
+  min-width: 0;
+  flex: 1;
+  outline: none;
+}
+
+.upload-box {
+  display: flex;
+  min-height: 126px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1.5px dashed #b9aaa0;
+  border-radius: 8px;
+  background: #f3eee7;
+  color: #5f5750;
+  font-weight: 850;
+}
+
+.filter-row {
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px 12px;
+  color: #5f5750;
+  font-weight: 800;
+}
+
+.filter-row-active,
+.filter-row:hover {
+  background: #e3f0e9;
+  color: #315c4b;
+}
+
+.action-button {
+  min-height: 40px;
+  background: #f3eee7;
+  padding: 0 12px;
+  color: #4c4640;
+  font-weight: 850;
+}
+
+.chat-user {
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  font-weight: 850;
+}
+
+.chat-user img {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+
+.chat-user-active,
+.chat-user:hover {
+  background: #e3f0e9;
+  color: #315c4b;
+}
+
+.message {
+  max-width: 75%;
+  border-radius: 8px;
+  background: #f0e8dd;
+  padding: 10px 12px;
+  line-height: 1.55;
+}
+
+.message-me {
+  margin-left: auto;
+  background: #222;
+  color: white;
+}
+
+.mobile-tab {
+  display: flex;
+  min-height: 48px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 8px;
+  color: #6b625a;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.mobile-tab-active {
+  background: #222;
+  color: white;
+}
