@@ -4,6 +4,8 @@ import {
   Bell,
   Camera,
   CheckCircle2,
+  Cloud,
+  Database,
   Heart,
   Home,
   Lock,
@@ -18,14 +20,17 @@ import {
   User,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { isCloudinaryConfigured, uploadImage } from "@/lib/cloudinary";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Category = "CD" | "照片小卡" | "小物";
 type Status = "欲交換" | "徵求" | "已交換";
+type View = "feed" | "search" | "create" | "messages" | "profile" | "admin";
 
 type Member = {
   id: string;
   username: string;
-  password: string;
+  password?: string;
   displayName: string;
   bio: string;
   avatar: string;
@@ -61,8 +66,38 @@ type ChatMessage = {
   createdAt: string;
 };
 
+type ProfileRow = {
+  id: string;
+  username: string;
+  display_name: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  is_admin: boolean | null;
+};
+
+type PostRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  category: Category;
+  status: Status;
+  tags: string[] | null;
+  image_url: string;
+  created_at: string;
+  profiles?: ProfileRow | null;
+  comments?: Array<{
+    id: string;
+    user_id: string;
+    content: string;
+    created_at: string;
+  }>;
+  post_likes?: Array<{ user_id: string }>;
+};
+
 const now = () => new Date().toISOString();
-const id = () => crypto.randomUUID();
+const newId = () => crypto.randomUUID();
+const fallbackImage = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
 
 const seedMembers: Member[] = [
   {
@@ -103,9 +138,7 @@ const seedPosts: Post[] = [
     tags: ["TXT", "CD", "Beomgyu", "台北面交"],
     image: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=900&q=80",
     likes: ["moa-sora"],
-    comments: [
-      { id: "c1", userId: "moa-sora", text: "我有 Beomgyu 小卡，可以私訊看細圖嗎？", createdAt: now() },
-    ],
+    comments: [{ id: "c1", userId: "moa-sora", text: "我有 Beomgyu 小卡，可以私訊看細圖嗎？", createdAt: now() }],
     createdAt: now(),
   },
   {
@@ -144,12 +177,44 @@ const seedMessages: ChatMessage[] = [
 const memberById = (members: Member[], userId: string) =>
   members.find((member) => member.id === userId) ?? members[0];
 
+const authEmail = (username: string) =>
+  username.includes("@") ? username : `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "")}@moa.local`;
+
+const profileToMember = (profile: ProfileRow): Member => ({
+  id: profile.id,
+  username: profile.username,
+  displayName: profile.display_name || profile.username,
+  bio: profile.bio || "正在整理 TXT 收藏。",
+  avatar: profile.avatar_url || `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(profile.username)}`,
+  isAdmin: Boolean(profile.is_admin),
+});
+
+const rowToPost = (row: PostRow): Post => ({
+  id: row.id,
+  userId: row.user_id,
+  title: row.title,
+  content: row.content,
+  category: row.category,
+  status: row.status,
+  tags: row.tags || [],
+  image: row.image_url,
+  likes: row.post_likes?.map((like) => like.user_id) || [],
+  comments:
+    row.comments?.map((comment) => ({
+      id: comment.id,
+      userId: comment.user_id,
+      text: comment.content,
+      createdAt: comment.created_at,
+    })) || [],
+  createdAt: row.created_at,
+});
+
 export default function HomePage() {
   const [members, setMembers] = useState<Member[]>(seedMembers);
   const [posts, setPosts] = useState<Post[]>(seedPosts);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [currentUserId, setCurrentUserId] = useState("yeonbin");
-  const [activeView, setActiveView] = useState<"feed" | "search" | "create" | "messages" | "profile" | "admin">("feed");
+  const [activeView, setActiveView] = useState<View>("feed");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"全部" | Category>("全部");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -165,53 +230,145 @@ export default function HomePage() {
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [chatTarget, setChatTarget] = useState("moa-sora");
   const [chatText, setChatText] = useState("");
+  const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
+  const [uploading, setUploading] = useState(false);
+  const backendEnabled = isSupabaseConfigured && Boolean(supabase);
 
   useEffect(() => {
-    const raw = localStorage.getItem("txt-moa-state");
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as {
-      members: Member[];
-      posts: Post[];
-      messages: ChatMessage[];
-      currentUserId: string;
+    if (!backendEnabled || !supabase) {
+      const raw = localStorage.getItem("txt-moa-state");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        members: Member[];
+        posts: Post[];
+        messages: ChatMessage[];
+        currentUserId: string;
+      };
+      queueMicrotask(() => {
+        setMembers(parsed.members);
+        setPosts(parsed.posts);
+        setMessages(parsed.messages);
+        setCurrentUserId(parsed.currentUserId);
+      });
+      return;
+    }
+
+    const client = supabase;
+    void loadCloudData();
+    const channel = client
+      .channel("moa-market-feed")
+      .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadCloudData())
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
     };
-    queueMicrotask(() => {
-      setMembers(parsed.members);
-      setPosts(parsed.posts);
-      setMessages(parsed.messages);
-      setCurrentUserId(parsed.currentUserId);
-    });
-  }, []);
+  }, [backendEnabled]);
 
   useEffect(() => {
+    if (backendEnabled) return;
     localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, currentUserId }));
-  }, [members, posts, messages, currentUserId]);
+  }, [backendEnabled, members, posts, messages, currentUserId]);
 
   const currentUser = memberById(members, currentUserId);
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
     return posts.filter((post) => {
       const matchesCategory = category === "全部" || post.category === category;
-      const haystack = [post.title, post.content, post.category, post.status, ...post.tags, memberById(members, post.userId).displayName]
+      const author = memberById(members, post.userId);
+      const haystack = [post.title, post.content, post.category, post.status, ...post.tags, author.displayName]
         .join(" ")
         .toLowerCase();
       return matchesCategory && (!text || haystack.includes(text));
     });
   }, [category, members, posts, query]);
 
-  function handleAuth(event: FormEvent<HTMLFormElement>) {
+  async function loadCloudData() {
+    if (!supabase) return;
+    const [profilesResult, postsResult, sessionResult] = await Promise.all([
+      supabase.from("profiles").select("*").order("created_at", { ascending: false }),
+      supabase
+        .from("posts")
+        .select("*, comments(id,user_id,content,created_at), post_likes(user_id)")
+        .order("created_at", { ascending: false }),
+      supabase.auth.getSession(),
+    ]);
+
+    if (profilesResult.error || postsResult.error) {
+      setNotice("Supabase 已設定，但資料表尚未建立或 RLS 尚未允許讀取。請先執行 supabase/schema.sql。");
+      return;
+    }
+
+    const cloudMembers = ((profilesResult.data || []) as ProfileRow[]).map(profileToMember);
+    const cloudPosts = ((postsResult.data || []) as PostRow[]).map(rowToPost);
+    setMembers(cloudMembers.length ? cloudMembers : seedMembers);
+    setPosts(cloudPosts.length ? cloudPosts : seedPosts);
+
+    const sessionUserId = sessionResult.data.session?.user.id;
+    if (sessionUserId) {
+      setCurrentUserId(sessionUserId);
+      setNotice(`雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`);
+    }
+  }
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!backendEnabled || !supabase) {
+      handleDemoAuth();
+      return;
+    }
+
+    const email = authEmail(authForm.username);
+    if (authMode === "login") {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password: authForm.password });
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      setCurrentUserId(data.user.id);
+      await loadCloudData();
+      setActiveView("feed");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password: authForm.password,
+      options: { data: { username: authForm.username, display_name: authForm.displayName || authForm.username } },
+    });
+    if (error || !data.user) {
+      setNotice(error?.message || "註冊失敗");
+      return;
+    }
+
+    await supabase.from("profiles").upsert({
+      id: data.user.id,
+      username: authForm.username,
+      display_name: authForm.displayName || authForm.username,
+      bio: "新加入的 MOA，正在整理 TXT 收藏。",
+      avatar_url: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(authForm.username)}`,
+    });
+    setCurrentUserId(data.user.id);
+    await loadCloudData();
+    setActiveView("feed");
+  }
+
+  function handleDemoAuth() {
     if (authMode === "login") {
       const found = members.find((member) => member.username === authForm.username && member.password === authForm.password);
       if (found) {
         setCurrentUserId(found.id);
         setActiveView("feed");
+      } else {
+        setNotice("Demo 帳號不存在，請用 README 的測試帳號或切到註冊。");
       }
       return;
     }
 
     const newMember: Member = {
-      id: id(),
+      id: newId(),
       username: authForm.username,
       password: authForm.password,
       displayName: authForm.displayName || authForm.username,
@@ -223,19 +380,25 @@ export default function HomePage() {
     setActiveView("feed");
   }
 
-  function handleImage(event: ChangeEvent<HTMLInputElement>) {
+  async function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setPostForm((form) => ({ ...form, image: String(reader.result) }));
-    reader.readAsDataURL(file);
+    setUploading(true);
+    try {
+      const imageUrl = await uploadImage(file);
+      setPostForm((form) => ({ ...form, image: imageUrl }));
+      setNotice(isCloudinaryConfigured ? "圖片已上傳到 Cloudinary。" : "圖片已載入 demo 暫存。設定 Cloudinary 後會改為雲端圖片。");
+    } catch {
+      setNotice("圖片上傳失敗，請確認 Cloudinary upload preset 是否為 unsigned。");
+    } finally {
+      setUploading(false);
+    }
   }
 
-  function createPost(event: FormEvent<HTMLFormElement>) {
+  async function createPost(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const fallbackImage = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
     const nextPost: Post = {
-      id: id(),
+      id: newId(),
       userId: currentUserId,
       title: postForm.title,
       content: postForm.content,
@@ -247,44 +410,98 @@ export default function HomePage() {
       comments: [],
       createdAt: now(),
     };
-    setPosts((list) => [nextPost, ...list]);
+
+    if (backendEnabled && supabase) {
+      const { error } = await supabase.from("posts").insert({
+        user_id: currentUserId,
+        title: nextPost.title,
+        content: nextPost.content,
+        category: nextPost.category,
+        status: nextPost.status,
+        tags: nextPost.tags,
+        image_url: nextPost.image,
+      });
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) => [nextPost, ...list]);
+    }
+
     setPostForm({ title: "", content: "", category: "CD", status: "欲交換", tags: "", image: "" });
     setActiveView("feed");
   }
 
-  function toggleLike(postId: string) {
+  async function toggleLike(postId: string) {
+    const post = posts.find((item) => item.id === postId);
+    if (!post) return;
+    const liked = post.likes.includes(currentUserId);
+
+    if (backendEnabled && supabase) {
+      if (liked) {
+        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", currentUserId);
+      } else {
+        await supabase.from("post_likes").insert({ post_id: postId, user_id: currentUserId });
+      }
+      await loadCloudData();
+      return;
+    }
+
     setPosts((list) =>
-      list.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              likes: post.likes.includes(currentUserId)
-                ? post.likes.filter((like) => like !== currentUserId)
-                : [...post.likes, currentUserId],
-            }
-          : post,
+      list.map((item) =>
+        item.id === postId
+          ? { ...item, likes: liked ? item.likes.filter((like) => like !== currentUserId) : [...item.likes, currentUserId] }
+          : item,
       ),
     );
   }
 
-  function addComment(postId: string) {
+  async function addComment(postId: string) {
     const text = commentDrafts[postId]?.trim();
     if (!text) return;
-    setPosts((list) =>
-      list.map((post) =>
-        post.id === postId
-          ? { ...post, comments: [...post.comments, { id: id(), userId: currentUserId, text, createdAt: now() }] }
-          : post,
-      ),
-    );
+
+    if (backendEnabled && supabase) {
+      const { error } = await supabase.from("comments").insert({ post_id: postId, user_id: currentUserId, content: text });
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) =>
+        list.map((post) =>
+          post.id === postId ? { ...post, comments: [...post.comments, { id: newId(), userId: currentUserId, text, createdAt: now() }] } : post,
+        ),
+      );
+    }
     setCommentDrafts((drafts) => ({ ...drafts, [postId]: "" }));
   }
 
-  function sendMessage(event: FormEvent<HTMLFormElement>) {
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!chatText.trim()) return;
-    setMessages((list) => [...list, { id: id(), from: currentUserId, to: chatTarget, text: chatText.trim(), createdAt: now() }]);
+    const nextMessage = { id: newId(), from: currentUserId, to: chatTarget, text: chatText.trim(), createdAt: now() };
+
+    if (backendEnabled && supabase) {
+      const { error } = await supabase.from("messages").insert({ sender_id: currentUserId, receiver_id: chatTarget, content: chatText.trim() });
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+    }
+
+    setMessages((list) => [...list, nextMessage]);
     setChatText("");
+  }
+
+  async function signOut() {
+    if (backendEnabled && supabase) {
+      await supabase.auth.signOut();
+    }
+    setCurrentUserId("yeonbin");
+    setActiveView("feed");
   }
 
   const navItems = [
@@ -312,12 +529,7 @@ export default function HomePage() {
             {navItems.map((item) => {
               const Icon = item.icon;
               return (
-                <button
-                  className={`nav-button ${activeView === item.key ? "nav-button-active" : ""}`}
-                  key={item.key}
-                  onClick={() => setActiveView(item.key)}
-                  type="button"
-                >
+                <button className={`nav-button ${activeView === item.key ? "nav-button-active" : ""}`} key={item.key} onClick={() => setActiveView(item.key)} type="button">
                   <Icon size={18} />
                   {item.label}
                 </button>
@@ -357,6 +569,11 @@ export default function HomePage() {
             </div>
           </section>
           <section className="panel mt-4">
+            <h2 className="section-title">雲端狀態</h2>
+            <StatusRow icon={Database} active={backendEnabled} label={backendEnabled ? "Supabase 已連線" : "Supabase 未設定"} />
+            <StatusRow icon={Cloud} active={isCloudinaryConfigured} label={isCloudinaryConfigured ? "Cloudinary 已啟用" : "Cloudinary 未設定"} />
+          </section>
+          <section className="panel mt-4">
             <h2 className="section-title">交換分類</h2>
             {(["全部", "CD", "照片小卡", "小物"] as const).map((item) => (
               <button className={`filter-row ${category === item ? "filter-row-active" : ""}`} key={item} onClick={() => setCategory(item)} type="button">
@@ -368,6 +585,8 @@ export default function HomePage() {
         </aside>
 
         <section className="min-w-0">
+          {notice && <div className="mb-4 rounded-lg border border-[#d8ccc0] bg-[#fffaf4] px-4 py-3 text-sm text-[#5f5750]">{notice}</div>}
+
           {activeView === "feed" && (
             <>
               <Hero currentUser={currentUser} setActiveView={setActiveView} />
@@ -435,11 +654,11 @@ export default function HomePage() {
                 </div>
                 <label className="upload-box">
                   <Camera size={24} />
-                  <span>{postForm.image ? "已選擇照片，可重新上傳" : "上傳商品照片"}</span>
+                  <span>{uploading ? "圖片上傳中..." : postForm.image ? "已選擇照片，可重新上傳" : "上傳商品照片"}</span>
                   <input accept="image/*" className="hidden" type="file" onChange={handleImage} />
                 </label>
                 {postForm.image && <img alt="貼文預覽" className="aspect-[4/3] w-full rounded-lg object-cover" src={postForm.image} />}
-                <button className="primary-button" type="submit">
+                <button className="primary-button" disabled={uploading} type="submit">
                   <Plus size={19} />
                   發佈到交換牆
                 </button>
@@ -490,27 +709,13 @@ export default function HomePage() {
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Badge>公開帳號</Badge>
                     <Badge>不開放金流</Badge>
-                    <Badge>交換優先</Badge>
+                    <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
                   </div>
                 </div>
-                <button className="secondary-button" onClick={() => setCurrentUserId("yeonbin")} type="button">
+                <button className="secondary-button" onClick={signOut} type="button">
                   <LogOut size={18} />
-                  登出示範
+                  登出
                 </button>
-              </div>
-              <div className="mt-6">
-                <h2 className="section-title">我的貼文</h2>
-                <PostList
-                  addComment={addComment}
-                  commentDrafts={commentDrafts}
-                  currentUserId={currentUserId}
-                  members={members}
-                  posts={posts.filter((post) => post.userId === currentUserId)}
-                  setChatTarget={setChatTarget}
-                  setCommentDrafts={setCommentDrafts}
-                  setActiveView={setActiveView}
-                  toggleLike={toggleLike}
-                />
               </div>
             </section>
           )}
@@ -551,7 +756,7 @@ export default function HomePage() {
               </div>
               <label className="input-shell">
                 <User size={18} />
-                <input value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} placeholder="帳號" required />
+                <input value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} placeholder="帳號或 Email" required />
               </label>
               {authMode === "register" && (
                 <label className="input-shell">
@@ -599,7 +804,7 @@ export default function HomePage() {
   );
 }
 
-function Hero({ currentUser, setActiveView }: { currentUser: Member; setActiveView: (view: "feed" | "search" | "create" | "messages" | "profile" | "admin") => void }) {
+function Hero({ currentUser, setActiveView }: { currentUser: Member; setActiveView: (view: View) => void }) {
   return (
     <section className="mb-5 overflow-hidden rounded-lg bg-[#1f1e1c] text-white">
       <div className="grid gap-0 md:grid-cols-[1.1fr_0.9fr]">
@@ -642,7 +847,7 @@ function PostList(props: {
   toggleLike: (postId: string) => void;
   addComment: (postId: string) => void;
   setChatTarget: (id: string) => void;
-  setActiveView: (view: "feed" | "search" | "create" | "messages" | "profile" | "admin") => void;
+  setActiveView: (view: View) => void;
 }) {
   if (!props.posts.length) {
     return <div className="panel mt-4 text-center text-[#7a7168]">目前沒有符合條件的交換貼文。</div>;
@@ -726,6 +931,15 @@ function Metric({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg bg-[#f3eee7] px-2 py-3">
       <p className="font-black">{value}</p>
       <p className="text-xs text-[#7a7168]">{label}</p>
+    </div>
+  );
+}
+
+function StatusRow({ icon: Icon, active, label }: { icon: typeof Database; active: boolean; label: string }) {
+  return (
+    <div className="mt-3 flex items-center gap-3 rounded-lg bg-[#f3eee7] px-3 py-2 text-sm font-bold">
+      <Icon size={18} className={active ? "text-[#315c4b]" : "text-[#9a4e40]"} />
+      {label}
     </div>
   );
 }
