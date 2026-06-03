@@ -63,9 +63,14 @@ create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   sender_id uuid not null references public.profiles(id) on delete cascade,
   receiver_id uuid not null references public.profiles(id) on delete cascade,
+  post_id uuid references public.posts(id) on delete set null,
   content text not null,
+  read_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.messages add column if not exists post_id uuid references public.posts(id) on delete set null;
+alter table public.messages add column if not exists read_at timestamptz;
 
 create table if not exists public.reports (
   id uuid primary key default gen_random_uuid(),
@@ -231,7 +236,13 @@ create policy "Users can read own conversations"
 drop policy if exists "Users can send messages" on public.messages;
 create policy "Users can send messages"
   on public.messages for insert
-  with check (auth.uid() = sender_id and not public.is_blocked(auth.uid()));
+  with check (auth.uid() = sender_id and not public.is_blocked(auth.uid()) and not public.is_blocked(receiver_id));
+
+drop policy if exists "Users can mark received messages read" on public.messages;
+create policy "Users can mark received messages read"
+  on public.messages for update
+  using (auth.uid() = receiver_id)
+  with check (auth.uid() = receiver_id);
 
 drop policy if exists "Users can create reports" on public.reports;
 create policy "Users can create reports"
@@ -296,5 +307,7 @@ create index if not exists comments_post_id_idx on public.comments(post_id);
 create index if not exists follows_followee_idx on public.follows(followee_id, created_at desc);
 create index if not exists follows_follower_idx on public.follows(follower_id, created_at desc);
 create index if not exists messages_pair_idx on public.messages(sender_id, receiver_id, created_at desc);
+create index if not exists messages_unread_idx on public.messages(receiver_id, read_at, created_at desc);
+create index if not exists messages_post_id_idx on public.messages(post_id);
 create index if not exists reports_status_idx on public.reports(status, created_at desc);
 create index if not exists notifications_user_idx on public.notifications(user_id, is_read, created_at desc);

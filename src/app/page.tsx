@@ -74,6 +74,8 @@ type ChatMessage = {
   from: string;
   to: string;
   text: string;
+  postId?: string | null;
+  readAt?: string | null;
   createdAt: string;
 };
 
@@ -113,6 +115,8 @@ type MessageRow = {
   sender_id: string;
   receiver_id: string;
   content: string;
+  post_id?: string | null;
+  read_at?: string | null;
   created_at: string;
 };
 
@@ -292,6 +296,8 @@ const rowToMessage = (row: MessageRow): ChatMessage => ({
   from: row.sender_id,
   to: row.receiver_id,
   text: row.content,
+  postId: row.post_id || null,
+  readAt: row.read_at || null,
   createdAt: row.created_at,
 });
 
@@ -354,6 +360,7 @@ export default function HomePage() {
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [chatTarget, setChatTarget] = useState("moa-sora");
   const [chatText, setChatText] = useState("");
+  const [chatPostId, setChatPostId] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", avatar: "" });
   const [editingPassword, setEditingPassword] = useState(false);
@@ -431,6 +438,19 @@ export default function HomePage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [viewerImage]);
 
+  useEffect(() => {
+    if (activeView !== "messages" || !chatTarget) return;
+    const unreadIds = messages.filter((message) => message.from === chatTarget && message.to === currentUserId && !message.readAt).map((message) => message.id);
+    if (!unreadIds.length) return;
+    const readAt = now();
+    if (backendEnabled && supabase) {
+      void supabase.from("messages").update({ read_at: readAt }).in("id", unreadIds);
+    }
+    queueMicrotask(() => {
+      setMessages((list) => list.map((message) => (unreadIds.includes(message.id) ? { ...message, readAt } : message)));
+    });
+  }, [activeView, backendEnabled, chatTarget, currentUserId, messages]);
+
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
   const isAuthenticated = !backendEnabled || Boolean(cloudUserId);
@@ -441,6 +461,22 @@ export default function HomePage() {
   const followerCount = (memberId: string) => follows.filter((follow) => follow.followeeId === memberId).length;
   const followingCount = (memberId: string) => follows.filter((follow) => follow.followerId === memberId).length;
   const isFollowing = (memberId: string) => follows.some((follow) => follow.followerId === currentUserId && follow.followeeId === memberId);
+  const conversationMessages = messages.filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(chatTarget));
+  const chatPartner = memberById(members, chatTarget);
+  const chatPost = chatPostId ? posts.find((post) => post.id === chatPostId) || null : null;
+  const isChatBlocked = Boolean(currentUser.isBlocked || chatPartner?.isBlocked);
+  const unreadMessageCount = (memberId?: string) =>
+    messages.filter((message) => message.to === currentUserId && !message.readAt && (!memberId || message.from === memberId)).length;
+  const chatMembers = members
+    .filter((member) => member.id !== currentUserId)
+    .sort((a, b) => {
+      const latestFor = (memberId: string) =>
+        messages
+          .filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(memberId))
+          .map((message) => new Date(message.createdAt).getTime())
+          .sort((left, right) => right - left)[0] || 0;
+      return latestFor(b.id) - latestFor(a.id);
+    });
 
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -487,7 +523,7 @@ export default function HomePage() {
       setNotice(`雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`);
       const { data: messageRows, error: messagesError } = await supabase
         .from("messages")
-        .select("id,sender_id,receiver_id,content,created_at")
+        .select("id,sender_id,receiver_id,content,post_id,read_at,created_at")
         .order("created_at", { ascending: true });
       if (!messagesError) setMessages(((messageRows || []) as MessageRow[]).map(rowToMessage));
       const { data: reportRows, error: reportsError } = await supabase
@@ -666,6 +702,12 @@ export default function HomePage() {
   function openPublicProfile(memberId: string) {
     setSelectedProfileId(memberId);
     setActiveView(memberId === currentUserId ? "profile" : "public-profile");
+  }
+
+  function openChat(memberId: string, postId?: string) {
+    setChatTarget(memberId);
+    setChatPostId(postId || null);
+    setActiveView("messages");
   }
 
   async function createNotification(input: { userId: string; type: string; content: string; postId?: string; commentId?: string; messageId?: string }) {
@@ -1022,19 +1064,20 @@ export default function HomePage() {
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!chatText.trim()) return;
-    if (currentUser.isBlocked) {
-      setNotice(blockedNotice);
-      window.alert(blockedNotice);
+    if (isChatBlocked) {
+      const message = currentUser.isBlocked ? blockedNotice : "對方帳號目前已被管理員限制，暫時不能私訊。";
+      setNotice(message);
+      window.alert(message);
       return;
     }
-    const nextMessage = { id: newId(), from: currentUserId, to: chatTarget, text: chatText.trim(), createdAt: now() };
+    const nextMessage = { id: newId(), from: currentUserId, to: chatTarget, text: chatText.trim(), postId: chatPostId, readAt: null, createdAt: now() };
 
     if (backendEnabled && supabase) {
       if (!cloudUserId) {
         setNotice("請先登入會員，再傳送私訊。");
         return;
       }
-      const { error } = await supabase.from("messages").insert({ sender_id: cloudUserId, receiver_id: chatTarget, content: chatText.trim() });
+      const { error } = await supabase.from("messages").insert({ sender_id: cloudUserId, receiver_id: chatTarget, content: chatText.trim(), post_id: chatPostId });
       if (error) {
         setNotice(error.message);
         return;
@@ -1046,6 +1089,7 @@ export default function HomePage() {
       await createNotification({ userId: chatTarget, type: "message", content: `${currentUser.displayName} 傳了新私訊給你。` });
     }
     setChatText("");
+    setChatPostId(null);
   }
 
   async function signOut() {
@@ -1170,7 +1214,7 @@ export default function HomePage() {
                 isFollowing={isFollowing}
                 openPublicProfile={openPublicProfile}
                 savePostEdit={savePostEdit}
-                setChatTarget={setChatTarget}
+                setChatTarget={openChat}
                 setCommentDrafts={setCommentDrafts}
                 setEditingPostId={setEditingPostId}
                 setEditPostForm={setEditPostForm}
@@ -1216,7 +1260,7 @@ export default function HomePage() {
                 isFollowing={isFollowing}
                 openPublicProfile={openPublicProfile}
                 savePostEdit={savePostEdit}
-                setChatTarget={setChatTarget}
+                setChatTarget={openChat}
                 setCommentDrafts={setCommentDrafts}
                 setEditingPostId={setEditingPostId}
                 setEditPostForm={setEditPostForm}
@@ -1288,26 +1332,58 @@ export default function HomePage() {
               <h1 className="page-title">私訊交換細節</h1>
               <div className="mt-5 grid gap-4 md:grid-cols-[190px_1fr]">
                 <div className="space-y-2">
-                  {members.filter((member) => member.id !== currentUserId).map((member) => (
-                    <button className={`chat-user ${chatTarget === member.id ? "chat-user-active" : ""}`} key={member.id} onClick={() => setChatTarget(member.id)} type="button">
+                  {chatMembers.map((member) => (
+                    <button
+                      className={`chat-user ${chatTarget === member.id ? "chat-user-active" : ""}`}
+                      key={member.id}
+                      onClick={() => {
+                        setChatTarget(member.id);
+                        setChatPostId(null);
+                      }}
+                      type="button"
+                    >
                       <img alt={member.displayName} src={member.avatar} />
-                      <span>{member.displayName}</span>
+                      <span className="min-w-0 flex-1 truncate">{member.displayName}</span>
+                      {unreadMessageCount(member.id) > 0 && <Badge>{unreadMessageCount(member.id)}</Badge>}
                     </button>
                   ))}
                 </div>
                 <div className="flex min-h-[480px] flex-col rounded-lg border border-[#e1d7cc] bg-[#fffdf8]">
+                  {chatPost && (
+                    <button className="m-3 flex items-center gap-3 rounded-lg border border-[#e1d7cc] bg-[#f3eee7] p-3 text-left" onClick={() => setActiveView("feed")} type="button">
+                      <img alt={chatPost.title} className="h-14 w-14 rounded-lg object-cover" src={chatPost.image} />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-[#7a7168]">對話商品</span>
+                        <span className="block truncate font-black">{chatPost.title}</span>
+                      </span>
+                    </button>
+                  )}
+                  {isChatBlocked && (
+                    <div className="mx-3 mt-3 rounded-lg bg-[#f3eee7] px-3 py-2 text-sm font-bold text-[#9a4e40]">
+                      {currentUser.isBlocked ? "你的帳號已被限制，不能傳送私訊。" : "對方帳號已被限制，暫時不能私訊。"}
+                    </div>
+                  )}
                   <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                    {messages
-                      .filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(chatTarget))
-                      .map((message) => (
+                    {conversationMessages
+                      .map((message) => {
+                        const linkedPost = message.postId ? posts.find((post) => post.id === message.postId) : null;
+                        return (
                         <div className={`message ${message.from === currentUserId ? "message-me" : ""}`} key={message.id}>
+                          {linkedPost && (
+                            <button className="mb-2 block rounded-lg bg-white/20 p-2 text-left text-xs font-bold" onClick={() => setActiveView("feed")} type="button">
+                              商品：{linkedPost.title}
+                            </button>
+                          )}
                           {message.text}
+                          {message.from === currentUserId && (
+                            <span className="mt-1 block text-right text-[0.68rem] opacity-70">{message.readAt ? "已讀" : "未讀"}</span>
+                          )}
                         </div>
-                      ))}
+                      );})}
                   </div>
                   <form className="flex gap-2 border-t border-[#e1d7cc] p-3" onSubmit={sendMessage}>
-                    <input className="field flex-1" value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="輸入訊息，約交換時間或照片細節" />
-                    <button className="icon-button bg-[#222] text-white" type="submit">
+                    <input className="field flex-1" disabled={isChatBlocked} value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="輸入訊息，約交換時間或照片細節" />
+                    <button className="icon-button bg-[#222] text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={isChatBlocked} type="submit">
                       <Send size={18} />
                     </button>
                   </form>
@@ -1462,8 +1538,7 @@ export default function HomePage() {
                   <button
                     className="secondary-button"
                     onClick={() => {
-                      setChatTarget(selectedProfile.id);
-                      setActiveView("messages");
+                      openChat(selectedProfile.id);
                     }}
                     type="button"
                   >
@@ -1490,7 +1565,7 @@ export default function HomePage() {
                 isFollowing={isFollowing}
                 openPublicProfile={openPublicProfile}
                 savePostEdit={savePostEdit}
-                setChatTarget={setChatTarget}
+                setChatTarget={openChat}
                 setCommentDrafts={setCommentDrafts}
                 setEditingPostId={setEditingPostId}
                 setEditPostForm={setEditPostForm}
@@ -1723,7 +1798,7 @@ function PostList(props: {
   reportComment: (commentId: string) => void;
   reportPost: (postId: string) => void;
   savePostEdit: (postId: string) => void;
-  setChatTarget: (id: string) => void;
+  setChatTarget: (id: string, postId?: string) => void;
   setActiveView: (view: View) => void;
   startEditPost: (post: Post) => void;
   openPublicProfile: (memberId: string) => void;
@@ -1840,7 +1915,7 @@ function PostList(props: {
                 <button
                   className="action-button ml-auto"
                   onClick={() => {
-                    props.setChatTarget(author.id);
+                    props.setChatTarget(author.id, post.id);
                     props.setActiveView("messages");
                   }}
                   type="button"
