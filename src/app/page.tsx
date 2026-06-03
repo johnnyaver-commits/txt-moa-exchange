@@ -273,7 +273,7 @@ export default function HomePage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"全部" | Category>("全部");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authForm, setAuthForm] = useState({ username: "yeonbin", password: "txt123", displayName: "" });
+  const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "" });
   const [postForm, setPostForm] = useState({
     title: "",
     content: "",
@@ -785,6 +785,8 @@ export default function HomePage() {
     }
     setCloudUserId(null);
     setCurrentUserId(members[0]?.id || "yeonbin");
+    setAuthMode("login");
+    setAuthForm({ username: "", password: "", displayName: "" });
     setNotice("已登出。請重新登入後再發佈、留言或私訊。");
     setActiveView("feed");
   }
