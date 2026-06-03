@@ -275,6 +275,7 @@ export default function HomePage() {
 
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
+  const isAuthenticated = !backendEnabled || Boolean(cloudUserId);
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
     return posts.filter((post) => {
@@ -333,6 +334,7 @@ export default function HomePage() {
         setNotice(error.message);
         return;
       }
+      setCloudUserId(data.user.id);
       setCurrentUserId(data.user.id);
       await loadCloudData();
       setActiveView("feed");
@@ -356,6 +358,7 @@ export default function HomePage() {
       bio: "新加入的 MOA，正在整理 TXT 收藏。",
       avatar_url: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(authForm.username)}`,
     });
+    setCloudUserId(data.user.id);
     setCurrentUserId(data.user.id);
     await loadCloudData();
     setActiveView("feed");
@@ -523,7 +526,8 @@ export default function HomePage() {
       await supabase.auth.signOut();
     }
     setCloudUserId(null);
-    setCurrentUserId("yeonbin");
+    setCurrentUserId(members[0]?.id || "yeonbin");
+    setNotice("已登出。請重新登入後再發佈、留言或私訊。");
     setActiveView("feed");
   }
 
@@ -740,8 +744,8 @@ export default function HomePage() {
 
           {activeView === "profile" && (
             <section className="panel">
-              {mustLoginForCloud && (
-                <div className="mb-6 lg:hidden">
+              {!isAuthenticated ? (
+                <div>
                   <h1 className="page-title">會員登入</h1>
                   <p className="mt-2 mb-4 text-sm text-[#7a7168]">登入後可以發佈交換貼文、留言與私訊。</p>
                   <AuthPanel
@@ -752,23 +756,24 @@ export default function HomePage() {
                     setAuthMode={setAuthMode}
                   />
                 </div>
-              )}
-              <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-                <img alt={currentUser.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={currentUser.avatar} />
-                <div className="flex-1">
-                  <h1 className="page-title">{currentUser.displayName}</h1>
-                  <p className="mt-2 text-[#5f5750]">{currentUser.bio}</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge>公開帳號</Badge>
-                    <Badge>不開放金流</Badge>
-                    <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
+              ) : (
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                  <img alt={currentUser.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={currentUser.avatar} />
+                  <div className="flex-1">
+                    <h1 className="page-title">{currentUser.displayName}</h1>
+                    <p className="mt-2 text-[#5f5750]">{currentUser.bio}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Badge>公開帳號</Badge>
+                      <Badge>不開放金流</Badge>
+                      <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
+                    </div>
                   </div>
+                  <button className="secondary-button" onClick={signOut} type="button">
+                    <LogOut size={18} />
+                    登出
+                  </button>
                 </div>
-                <button className="secondary-button" onClick={signOut} type="button">
-                  <LogOut size={18} />
-                  登出
-                </button>
-              </div>
+              )}
             </section>
           )}
 
@@ -800,14 +805,33 @@ export default function HomePage() {
 
         <aside className="hidden lg:block">
           <section className="panel">
-            <h2 className="section-title">會員登入</h2>
-            <AuthPanel
-              authForm={authForm}
-              authMode={authMode}
-              onAuth={handleAuth}
-              setAuthForm={setAuthForm}
-              setAuthMode={setAuthMode}
-            />
+            {isAuthenticated ? (
+              <>
+                <h2 className="section-title">目前帳號</h2>
+                <div className="mt-4 flex items-center gap-3">
+                  <img alt={currentUser.displayName} className="h-12 w-12 rounded-full object-cover" src={currentUser.avatar} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-bold">{currentUser.displayName}</p>
+                    <p className="text-sm text-[#7a7168]">@{currentUser.username}</p>
+                  </div>
+                </div>
+                <button className="secondary-button mt-4 w-full justify-center" onClick={signOut} type="button">
+                  <LogOut size={18} />
+                  登出
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 className="section-title">會員登入</h2>
+                <AuthPanel
+                  authForm={authForm}
+                  authMode={authMode}
+                  onAuth={handleAuth}
+                  setAuthForm={setAuthForm}
+                  setAuthMode={setAuthMode}
+                />
+              </>
+            )}
           </section>
           <section className="panel mt-4">
             <h2 className="section-title">推薦 MOA</h2>
