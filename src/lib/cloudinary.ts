@@ -16,10 +16,14 @@ export async function uploadImage(file: File) {
   formData.append("upload_preset", uploadPreset);
   formData.append("folder", "txt-moa-exchange");
 
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 20000);
+
   const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
     method: "POST",
     body: formData,
-  });
+    signal: controller.signal,
+  }).finally(() => window.clearTimeout(timeout));
 
   if (!response.ok) {
     throw new Error("Cloudinary upload failed");
@@ -37,4 +41,3 @@ function readFileAsDataUrl(file: File) {
     reader.readAsDataURL(file);
   });
 }
-

@@ -274,6 +274,7 @@ export default function HomePage() {
   }, [backendEnabled, members, posts, messages, currentUserId]);
 
   const currentUser = memberById(members, currentUserId);
+  const mustLoginForCloud = backendEnabled && !cloudUserId;
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
     return posts.filter((post) => {
@@ -658,33 +659,49 @@ export default function HomePage() {
           {activeView === "create" && (
             <section className="panel">
               <h1 className="page-title">發佈交換貼文</h1>
-              <form className="mt-5 grid gap-4" onSubmit={createPost}>
-                <input className="field" required value={postForm.title} onChange={(event) => setPostForm({ ...postForm, title: event.target.value })} placeholder="商品標題，例如：Blue Hour CD 換小卡" />
-                <textarea className="field min-h-28" required value={postForm.content} onChange={(event) => setPostForm({ ...postForm, content: event.target.value })} placeholder="描述保存狀況、希望交換品項、面交/寄送方式" />
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <select className="field" value={postForm.category} onChange={(event) => setPostForm({ ...postForm, category: event.target.value as Category })}>
-                    <option>CD</option>
-                    <option>照片小卡</option>
-                    <option>小物</option>
-                  </select>
-                  <select className="field" value={postForm.status} onChange={(event) => setPostForm({ ...postForm, status: event.target.value as Status })}>
-                    <option>欲交換</option>
-                    <option>徵求</option>
-                    <option>已交換</option>
-                  </select>
-                  <input className="field" value={postForm.tags} onChange={(event) => setPostForm({ ...postForm, tags: event.target.value })} placeholder="標籤，以逗號分隔" />
+              {mustLoginForCloud ? (
+                <div className="mt-5">
+                  <p className="mb-4 rounded-lg bg-[#f3eee7] px-4 py-3 text-sm font-bold text-[#5f5750]">
+                    請先登入會員，再發佈交換貼文。
+                  </p>
+                  <AuthPanel
+                    authForm={authForm}
+                    authMode={authMode}
+                    onAuth={handleAuth}
+                    setAuthForm={setAuthForm}
+                    setAuthMode={setAuthMode}
+                  />
                 </div>
-                <label className="upload-box">
-                  <Camera size={24} />
-                  <span>{uploading ? "圖片上傳中..." : postForm.image ? "已選擇照片，可重新上傳" : "上傳商品照片"}</span>
-                  <input accept="image/*" className="hidden" type="file" onChange={handleImage} />
-                </label>
-                {postForm.image && <img alt="貼文預覽" className="aspect-[4/3] w-full rounded-lg object-cover" src={postForm.image} />}
-                <button className="primary-button" disabled={uploading} type="submit">
-                  <Plus size={19} />
-                  發佈到交換牆
-                </button>
-              </form>
+              ) : (
+                <form className="mt-5 grid gap-4" onSubmit={createPost}>
+                  <input className="field" required value={postForm.title} onChange={(event) => setPostForm({ ...postForm, title: event.target.value })} placeholder="商品標題，例如：Blue Hour CD 換小卡" />
+                  <textarea className="field min-h-28" required value={postForm.content} onChange={(event) => setPostForm({ ...postForm, content: event.target.value })} placeholder="描述保存狀況、希望交換品項、面交/寄送方式" />
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <select className="field" value={postForm.category} onChange={(event) => setPostForm({ ...postForm, category: event.target.value as Category })}>
+                      <option>CD</option>
+                      <option>照片小卡</option>
+                      <option>小物</option>
+                    </select>
+                    <select className="field" value={postForm.status} onChange={(event) => setPostForm({ ...postForm, status: event.target.value as Status })}>
+                      <option>欲交換</option>
+                      <option>徵求</option>
+                      <option>已交換</option>
+                    </select>
+                    <input className="field" value={postForm.tags} onChange={(event) => setPostForm({ ...postForm, tags: event.target.value })} placeholder="標籤，以逗號分隔" />
+                  </div>
+                  <label className="upload-box">
+                    <Camera size={24} />
+                    <span>{uploading ? "圖片上傳中..." : postForm.image ? "已選擇照片，可重新上傳" : "上傳商品照片"}</span>
+                    <input accept="image/*" className="hidden" type="file" onChange={handleImage} />
+                  </label>
+                  {postForm.image && <img alt="貼文預覽" className="aspect-[4/3] w-full rounded-lg object-cover" src={postForm.image} />}
+                  <p className="text-sm text-[#7a7168]">標題與描述為必填；圖片可選，未上傳時會使用預設圖片。</p>
+                  <button className="primary-button disabled:cursor-not-allowed disabled:opacity-60" disabled={uploading} type="submit">
+                    <Plus size={19} />
+                    {uploading ? "等待圖片上傳" : "發佈到交換牆"}
+                  </button>
+                </form>
+              )}
             </section>
           )}
 
@@ -723,6 +740,19 @@ export default function HomePage() {
 
           {activeView === "profile" && (
             <section className="panel">
+              {mustLoginForCloud && (
+                <div className="mb-6 lg:hidden">
+                  <h1 className="page-title">會員登入</h1>
+                  <p className="mt-2 mb-4 text-sm text-[#7a7168]">登入後可以發佈交換貼文、留言與私訊。</p>
+                  <AuthPanel
+                    authForm={authForm}
+                    authMode={authMode}
+                    onAuth={handleAuth}
+                    setAuthForm={setAuthForm}
+                    setAuthMode={setAuthMode}
+                  />
+                </div>
+              )}
               <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
                 <img alt={currentUser.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={currentUser.avatar} />
                 <div className="flex-1">
@@ -771,27 +801,13 @@ export default function HomePage() {
         <aside className="hidden lg:block">
           <section className="panel">
             <h2 className="section-title">會員登入</h2>
-            <form className="mt-4 grid gap-3" onSubmit={handleAuth}>
-              <div className="grid grid-cols-2 rounded-lg bg-[#ece3d8] p-1 text-sm font-bold">
-                <button className={`rounded-md py-2 ${authMode === "login" ? "bg-white" : ""}`} onClick={() => setAuthMode("login")} type="button">登入</button>
-                <button className={`rounded-md py-2 ${authMode === "register" ? "bg-white" : ""}`} onClick={() => setAuthMode("register")} type="button">註冊</button>
-              </div>
-              <label className="input-shell">
-                <User size={18} />
-                <input value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} placeholder="帳號或 Email" required />
-              </label>
-              {authMode === "register" && (
-                <label className="input-shell">
-                  <Sparkles size={18} />
-                  <input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="暱稱" />
-                </label>
-              )}
-              <label className="input-shell">
-                <Lock size={18} />
-                <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} placeholder="密碼" required />
-              </label>
-              <button className="primary-button" type="submit">{authMode === "login" ? "登入" : "建立帳號"}</button>
-            </form>
+            <AuthPanel
+              authForm={authForm}
+              authMode={authMode}
+              onAuth={handleAuth}
+              setAuthForm={setAuthForm}
+              setAuthMode={setAuthMode}
+            />
           </section>
           <section className="panel mt-4">
             <h2 className="section-title">推薦 MOA</h2>
@@ -945,6 +961,50 @@ function PostList(props: {
         );
       })}
     </div>
+  );
+}
+
+function AuthPanel({
+  authForm,
+  authMode,
+  onAuth,
+  setAuthForm,
+  setAuthMode,
+}: {
+  authForm: { username: string; password: string; displayName: string };
+  authMode: "login" | "register";
+  onAuth: (event: FormEvent<HTMLFormElement>) => void;
+  setAuthForm: (value: { username: string; password: string; displayName: string }) => void;
+  setAuthMode: (value: "login" | "register") => void;
+}) {
+  return (
+    <form className="mt-4 grid gap-3" onSubmit={onAuth}>
+      <div className="grid grid-cols-2 rounded-lg bg-[#ece3d8] p-1 text-sm font-bold">
+        <button className={`rounded-md py-2 ${authMode === "login" ? "bg-white" : ""}`} onClick={() => setAuthMode("login")} type="button">
+          登入
+        </button>
+        <button className={`rounded-md py-2 ${authMode === "register" ? "bg-white" : ""}`} onClick={() => setAuthMode("register")} type="button">
+          註冊
+        </button>
+      </div>
+      <label className="input-shell">
+        <User size={18} />
+        <input value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} placeholder="帳號或 Email" required />
+      </label>
+      {authMode === "register" && (
+        <label className="input-shell">
+          <Sparkles size={18} />
+          <input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="暱稱" />
+        </label>
+      )}
+      <label className="input-shell">
+        <Lock size={18} />
+        <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} placeholder="密碼" required />
+      </label>
+      <button className="primary-button" type="submit">
+        {authMode === "login" ? "登入" : "建立帳號"}
+      </button>
+    </form>
   );
 }
 
