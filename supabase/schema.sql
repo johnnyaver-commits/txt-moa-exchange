@@ -10,12 +10,20 @@ create table if not exists public.profiles (
   is_blocked boolean not null default false,
   blocked_at timestamptz,
   blocked_by uuid references public.profiles(id) on delete set null,
+  dm_policy text not null default 'everyone',
+  hide_public_posts boolean not null default false,
+  hide_public_comments boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 alter table public.profiles add column if not exists is_blocked boolean not null default false;
 alter table public.profiles add column if not exists blocked_at timestamptz;
 alter table public.profiles add column if not exists blocked_by uuid references public.profiles(id) on delete set null;
+alter table public.profiles add column if not exists dm_policy text not null default 'everyone';
+alter table public.profiles add column if not exists hide_public_posts boolean not null default false;
+alter table public.profiles add column if not exists hide_public_comments boolean not null default false;
+alter table public.profiles drop constraint if exists profiles_dm_policy_check;
+alter table public.profiles add constraint profiles_dm_policy_check check (dm_policy in ('everyone', 'following', 'mutual'));
 
 create table if not exists public.posts (
   id uuid primary key default gen_random_uuid(),
@@ -191,6 +199,40 @@ as $$
   );
 $$;
 
+create or replace function public.can_send_message_to(receiver_id uuid, sender_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles receiver
+    where receiver.id = receiver_id
+      and (
+        receiver.dm_policy = 'everyone'
+        or (
+          receiver.dm_policy = 'following'
+          and exists (
+            select 1 from public.follows
+            where follower_id = receiver_id and followee_id = sender_id
+          )
+        )
+        or (
+          receiver.dm_policy = 'mutual'
+          and exists (
+            select 1 from public.follows
+            where follower_id = receiver_id and followee_id = sender_id
+          )
+          and exists (
+            select 1 from public.follows
+            where follower_id = sender_id and followee_id = receiver_id
+          )
+        )
+      )
+  );
+$$;
+
 drop policy if exists "Profiles are readable" on public.profiles;
 create policy "Profiles are readable"
   on public.profiles for select
@@ -318,6 +360,7 @@ create policy "Users can send messages"
     and not public.is_blocked(auth.uid())
     and not public.is_blocked(receiver_id)
     and not public.is_user_blocked_between(sender_id, receiver_id)
+    and public.can_send_message_to(receiver_id, sender_id)
   );
 
 drop policy if exists "Users can mark received messages read" on public.messages;

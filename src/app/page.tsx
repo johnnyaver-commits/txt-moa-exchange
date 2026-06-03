@@ -36,6 +36,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Category = "CD" | "照片小卡" | "小物";
 type Status = "欲交換" | "徵求" | "洽談中" | "已保留" | "已完成" | "取消交換" | "已交換";
+type DmPolicy = "everyone" | "following" | "mutual";
 type View = "feed" | "search" | "create" | "messages" | "profile" | "public-profile" | "notifications" | "admin";
 type AuthMode = "login" | "register" | "forgot";
 
@@ -48,6 +49,9 @@ type Member = {
   avatar: string;
   isAdmin?: boolean;
   isBlocked?: boolean;
+  dmPolicy?: DmPolicy;
+  hidePublicPosts?: boolean;
+  hidePublicComments?: boolean;
 };
 
 type Comment = {
@@ -116,6 +120,9 @@ type ProfileRow = {
   avatar_url: string | null;
   is_admin: boolean | null;
   is_blocked?: boolean | null;
+  dm_policy?: DmPolicy | null;
+  hide_public_posts?: boolean | null;
+  hide_public_comments?: boolean | null;
 };
 
 type PostRow = {
@@ -205,6 +212,11 @@ const categories = ["CD", "照片小卡", "小物"] as const;
 const postStatuses = ["欲交換", "徵求", "洽談中", "已保留", "已完成", "取消交換", "已交換"] as const;
 const activeExchangeStatuses: Status[] = ["欲交換", "徵求", "洽談中", "已保留"];
 const reportCategories = ["詐騙疑慮", "不實廣告", "不當內容", "重複洗版", "其他"] as const;
+const dmPolicyLabels: Record<DmPolicy, string> = {
+  everyone: "所有會員可私訊",
+  following: "只允許我追蹤的人",
+  mutual: "只允許互追的人",
+};
 
 const seedMembers: Member[] = [
   {
@@ -213,9 +225,12 @@ const seedMembers: Member[] = [
     password: "admin123",
     displayName: "MOA 管理員",
     bio: "審核交換貼文、處理檢舉與維護社群安全。",
-    avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=240&q=80",
-    isAdmin: true,
-    isBlocked: false,
+  avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=240&q=80",
+  isAdmin: true,
+  isBlocked: false,
+  dmPolicy: "everyone",
+  hidePublicPosts: false,
+  hidePublicComments: false,
   },
   {
     id: "yeonbin",
@@ -307,6 +322,9 @@ const profileToMember = (profile: ProfileRow): Member => ({
   avatar: profile.avatar_url || `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(profile.username)}`,
   isAdmin: Boolean(profile.is_admin),
   isBlocked: Boolean(profile.is_blocked),
+  dmPolicy: profile.dm_policy || "everyone",
+  hidePublicPosts: Boolean(profile.hide_public_posts),
+  hidePublicComments: Boolean(profile.hide_public_comments),
 });
 
 const rowToPost = (row: PostRow): Post => ({
@@ -436,7 +454,14 @@ export default function HomePage() {
   const [chatText, setChatText] = useState("");
   const [chatPostId, setChatPostId] = useState<string | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", avatar: "" });
+  const [profileForm, setProfileForm] = useState({
+    displayName: "",
+    bio: "",
+    avatar: "",
+    dmPolicy: "everyone" as DmPolicy,
+    hidePublicPosts: false,
+    hidePublicComments: false,
+  });
   const [editingPassword, setEditingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [passwordUpdating, setPasswordUpdating] = useState(false);
@@ -540,10 +565,31 @@ export default function HomePage() {
   const blockedNotice = "你的帳號已被管理員限制發言與發布，請聯絡管理員處理。";
   const unreadNotifications = notifications.filter((notification) => !notification.isRead).length;
   const selectedProfile = memberById(members, selectedProfileId);
-  const selectedProfilePosts = posts.filter((post) => post.userId === selectedProfile.id && (!post.isHidden || currentUser.isAdmin || post.userId === currentUserId));
+  const canViewSelectedPosts = selectedProfile.id === currentUserId || currentUser.isAdmin || !selectedProfile.hidePublicPosts;
+  const canViewSelectedComments = selectedProfile.id === currentUserId || currentUser.isAdmin || !selectedProfile.hidePublicComments;
+  const selectedProfilePosts = canViewSelectedPosts
+    ? posts.filter((post) => post.userId === selectedProfile.id && (!post.isHidden || currentUser.isAdmin || post.userId === currentUserId))
+    : [];
+  const selectedProfileComments = canViewSelectedComments
+    ? posts
+        .flatMap((post) =>
+          post.comments
+            .filter((comment) => comment.userId === selectedProfile.id)
+            .map((comment) => ({ ...comment, postId: post.id, postTitle: post.title, postHidden: post.isHidden })),
+        )
+        .filter((comment) => !comment.postHidden || currentUser.isAdmin || selectedProfile.id === currentUserId)
+    : [];
   const followerCount = (memberId: string) => follows.filter((follow) => follow.followeeId === memberId).length;
   const followingCount = (memberId: string) => follows.filter((follow) => follow.followerId === memberId).length;
   const isFollowing = (memberId: string) => follows.some((follow) => follow.followerId === currentUserId && follow.followeeId === memberId);
+  const isFollowedBy = (memberId: string) => follows.some((follow) => follow.followerId === memberId && follow.followeeId === currentUserId);
+  const canMessageMember = (member: Member) => {
+    if (member.id === currentUserId) return false;
+    if (currentUser.isBlocked || member.isBlocked || isMutuallyBlocked(member.id)) return false;
+    if ((member.dmPolicy || "everyone") === "everyone") return true;
+    if (member.dmPolicy === "following") return isFollowedBy(member.id);
+    return isFollowedBy(member.id) && isFollowing(member.id);
+  };
   const isSaved = (postId: string) => savedPosts.some((save) => save.userId === currentUserId && save.postId === postId);
   const isBlockedByMe = (memberId: string) => userBlocks.some((block) => block.blockerId === currentUserId && block.blockedId === memberId);
   const isMutuallyBlocked = (memberId: string) =>
@@ -557,7 +603,7 @@ export default function HomePage() {
   const conversationMessages = messages.filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(chatTarget));
   const chatPartner = memberById(members, chatTarget);
   const chatPost = chatPostId ? posts.find((post) => post.id === chatPostId) || null : null;
-  const isChatBlocked = Boolean(currentUser.isBlocked || chatPartner?.isBlocked || isMutuallyBlocked(chatTarget));
+  const isChatBlocked = Boolean(currentUser.isBlocked || chatPartner?.isBlocked || isMutuallyBlocked(chatTarget) || (chatPartner && !canMessageMember(chatPartner)));
   const unreadMessageCount = (memberId?: string) =>
     messages.filter((message) => message.to === currentUserId && !message.readAt && (!memberId || message.from === memberId)).length;
   const chatMembers = members
@@ -1246,6 +1292,9 @@ export default function HomePage() {
           display_name: profileForm.displayName,
           bio: profileForm.bio,
           avatar_url: profileForm.avatar,
+          dm_policy: profileForm.dmPolicy,
+          hide_public_posts: profileForm.hidePublicPosts,
+          hide_public_comments: profileForm.hidePublicComments,
         })
         .eq("id", cloudUserId);
       if (error) {
@@ -1256,7 +1305,17 @@ export default function HomePage() {
     } else {
       setMembers((list) =>
         list.map((member) =>
-          member.id === currentUserId ? { ...member, displayName: profileForm.displayName, bio: profileForm.bio, avatar: profileForm.avatar } : member,
+          member.id === currentUserId
+            ? {
+                ...member,
+                displayName: profileForm.displayName,
+                bio: profileForm.bio,
+                avatar: profileForm.avatar,
+                dmPolicy: profileForm.dmPolicy,
+                hidePublicPosts: profileForm.hidePublicPosts,
+                hidePublicComments: profileForm.hidePublicComments,
+              }
+            : member,
         ),
       );
     }
@@ -1335,7 +1394,9 @@ export default function HomePage() {
         ? blockedNotice
         : isMutuallyBlocked(chatTarget)
           ? "你或對方已將彼此加入黑名單，暫時不能私訊。"
-          : "對方帳號目前已被管理員限制，暫時不能私訊。";
+          : chatPartner?.isBlocked
+            ? "對方帳號目前已被管理員限制，暫時不能私訊。"
+            : "對方已限制陌生人私訊，請先追蹤或互追後再傳訊息。";
       setNotice(message);
       window.alert(message);
       return;
@@ -1672,7 +1733,13 @@ export default function HomePage() {
                   )}
                   {isChatBlocked && (
                     <div className="mx-3 mt-3 rounded-lg bg-[#f3eee7] px-3 py-2 text-sm font-bold text-[#9a4e40]">
-                      {currentUser.isBlocked ? "你的帳號已被限制，不能傳送私訊。" : "對方帳號已被限制，暫時不能私訊。"}
+                      {currentUser.isBlocked
+                        ? "你的帳號已被限制，不能傳送私訊。"
+                        : chatPartner?.isBlocked
+                          ? "對方帳號已被限制，暫時不能私訊。"
+                          : isMutuallyBlocked(chatTarget)
+                            ? "你或對方已將彼此加入黑名單。"
+                            : "對方已限制陌生人私訊，請先追蹤或互追後再傳訊息。"}
                     </div>
                   )}
                   <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -1735,7 +1802,14 @@ export default function HomePage() {
                       <button
                         className="secondary-button"
                         onClick={() => {
-                          setProfileForm({ displayName: currentUser.displayName, bio: currentUser.bio, avatar: currentUser.avatar });
+                          setProfileForm({
+                            displayName: currentUser.displayName,
+                            bio: currentUser.bio,
+                            avatar: currentUser.avatar,
+                            dmPolicy: currentUser.dmPolicy || "everyone",
+                            hidePublicPosts: Boolean(currentUser.hidePublicPosts),
+                            hidePublicComments: Boolean(currentUser.hidePublicComments),
+                          });
                           setEditingProfile((value) => !value);
                         }}
                         type="button"
@@ -1781,6 +1855,25 @@ export default function HomePage() {
                       <input className="field" value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} placeholder="暱稱" />
                       <textarea className="field min-h-24" value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} placeholder="簡介" />
                       <input className="field" value={profileForm.avatar} onChange={(event) => setProfileForm({ ...profileForm, avatar: event.target.value })} placeholder="頭像 URL" />
+                      <div className="rounded-lg border border-[#d8ccc0] bg-white p-4">
+                        <h2 className="section-title">隱私設定</h2>
+                        <label className="mt-3 block text-sm font-bold text-[#5f5750]">
+                          陌生人私訊限制
+                          <select className="field mt-2" value={profileForm.dmPolicy} onChange={(event) => setProfileForm({ ...profileForm, dmPolicy: event.target.value as DmPolicy })}>
+                            {(Object.keys(dmPolicyLabels) as DmPolicy[]).map((policy) => (
+                              <option key={policy} value={policy}>{dmPolicyLabels[policy]}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="mt-3 flex items-center gap-2 text-sm font-bold text-[#5f5750]">
+                          <input checked={profileForm.hidePublicPosts} onChange={(event) => setProfileForm({ ...profileForm, hidePublicPosts: event.target.checked })} type="checkbox" />
+                          在公開個人頁隱藏我的貼文紀錄
+                        </label>
+                        <label className="mt-3 flex items-center gap-2 text-sm font-bold text-[#5f5750]">
+                          <input checked={profileForm.hidePublicComments} onChange={(event) => setProfileForm({ ...profileForm, hidePublicComments: event.target.checked })} type="checkbox" />
+                          在公開個人頁隱藏我的留言紀錄
+                        </label>
+                      </div>
                       <div className="flex gap-2">
                         <button className="primary-button disabled:cursor-not-allowed disabled:opacity-60" disabled={profileUploading} type="submit">
                           {profileUploading ? "等待頭像上傳" : "儲存資料"}
@@ -1836,6 +1929,7 @@ export default function HomePage() {
                   <h1 className="page-title">{selectedProfile.displayName}</h1>
                   <p className="mt-1 text-sm text-[#7a7168]">@{selectedProfile.username}</p>
                   <p className="mt-3 text-[#5f5750]">{selectedProfile.bio}</p>
+                  <p className="mt-2 text-xs font-bold text-[#7a7168]">私訊：{dmPolicyLabels[selectedProfile.dmPolicy || "everyone"]}</p>
                   <div className="mt-4 grid max-w-xl grid-cols-4 gap-2 text-center text-sm">
                     <Metric label="貼文" value={selectedProfilePosts.length} />
                     <Metric label="追蹤" value={followingCount(selectedProfile.id)} />
@@ -1850,14 +1944,15 @@ export default function HomePage() {
                     {isFollowing(selectedProfile.id) ? "追蹤中" : "追蹤"}
                   </button>
                   <button
-                    className="secondary-button"
+                    className="secondary-button disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canMessageMember(selectedProfile)}
                     onClick={() => {
                       openChat(selectedProfile.id);
                     }}
                     type="button"
                   >
                     <MessageCircle size={18} />
-                    私訊
+                    {canMessageMember(selectedProfile) ? "私訊" : "不可私訊"}
                   </button>
                   <button className="secondary-button" onClick={() => toggleUserBlock(selectedProfile)} type="button">
                     <AlertTriangle size={18} />
@@ -1884,39 +1979,57 @@ export default function HomePage() {
                 </div>
               )}
               <h2 className="section-title mt-8">公開貼文</h2>
-              <PostList
-                addComment={addComment}
-                commentDrafts={commentDrafts}
-                currentUserId={currentUserId}
-                currentUser={currentUser}
-                deleteComment={deleteComment}
-                deletePost={deletePost}
-                editingPostId={editingPostId}
-                editPostForm={editPostForm}
-                members={members}
-                reportComment={reportComment}
-                reportPost={reportPost}
-                posts={selectedProfilePosts}
-                followerCount={followerCount}
-                isFollowing={isFollowing}
-                openPublicProfile={openPublicProfile}
-                savePostEdit={savePostEdit}
-                setChatTarget={openChat}
-                setCommentDrafts={setCommentDrafts}
-                setEditingPostId={setEditingPostId}
-                setEditPostForm={setEditPostForm}
-                setActiveView={setActiveView}
-                startEditPost={startEditPost}
-                toggleFollow={toggleFollow}
-                togglePostHidden={togglePostHidden}
-                openImageViewer={setViewerImage}
-                toggleLike={toggleLike}
-                toggleSavePost={toggleSavePost}
-                isSaved={isSaved}
-                reviewsForUser={reviewsForUser}
-                averageRating={averageRating}
-                submitExchangeReview={submitExchangeReview}
-              />
+              {canViewSelectedPosts ? (
+                <PostList
+                  addComment={addComment}
+                  commentDrafts={commentDrafts}
+                  currentUserId={currentUserId}
+                  currentUser={currentUser}
+                  deleteComment={deleteComment}
+                  deletePost={deletePost}
+                  editingPostId={editingPostId}
+                  editPostForm={editPostForm}
+                  members={members}
+                  reportComment={reportComment}
+                  reportPost={reportPost}
+                  posts={selectedProfilePosts}
+                  followerCount={followerCount}
+                  isFollowing={isFollowing}
+                  openPublicProfile={openPublicProfile}
+                  savePostEdit={savePostEdit}
+                  setChatTarget={openChat}
+                  setCommentDrafts={setCommentDrafts}
+                  setEditingPostId={setEditingPostId}
+                  setEditPostForm={setEditPostForm}
+                  setActiveView={setActiveView}
+                  startEditPost={startEditPost}
+                  toggleFollow={toggleFollow}
+                  togglePostHidden={togglePostHidden}
+                  openImageViewer={setViewerImage}
+                  toggleLike={toggleLike}
+                  toggleSavePost={toggleSavePost}
+                  isSaved={isSaved}
+                  reviewsForUser={reviewsForUser}
+                  averageRating={averageRating}
+                  submitExchangeReview={submitExchangeReview}
+                />
+              ) : (
+                <div className="panel mt-4 text-center text-[#7a7168]">此會員已隱藏貼文紀錄。</div>
+              )}
+              <h2 className="section-title mt-8">留言紀錄</h2>
+              {canViewSelectedComments ? (
+                <div className="mt-4 space-y-3">
+                  {selectedProfileComments.length ? selectedProfileComments.slice(0, 10).map((comment) => (
+                    <div className="rounded-lg border border-[#e1d7cc] bg-white p-4 text-sm" key={comment.id}>
+                      <p className="font-bold text-[#4c4640]">{comment.postTitle}</p>
+                      <p className="mt-2 text-[#5f5750]">{comment.text}</p>
+                      <p className="mt-2 text-xs text-[#7a7168]">{new Date(comment.createdAt).toLocaleString("zh-TW")}</p>
+                    </div>
+                  )) : <p className="mt-4 text-sm text-[#7a7168]">目前沒有公開留言紀錄。</p>}
+                </div>
+              ) : (
+                <div className="panel mt-4 text-center text-[#7a7168]">此會員已隱藏留言紀錄。</div>
+              )}
             </section>
           )}
 
