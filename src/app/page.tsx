@@ -33,7 +33,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Category = "CD" | "照片小卡" | "小物";
 type Status = "欲交換" | "徵求" | "已交換";
-type View = "feed" | "search" | "create" | "messages" | "profile" | "admin";
+type View = "feed" | "search" | "create" | "messages" | "profile" | "public-profile" | "notifications" | "admin";
 type AuthMode = "login" | "register" | "forgot";
 
 type Member = {
@@ -132,6 +132,31 @@ type ReportRow = {
   post_id: string | null;
   comment_id: string | null;
   created_at: string;
+};
+
+type Follow = { followerId: string; followeeId: string; createdAt: string };
+type FollowRow = { follower_id: string; followee_id: string; created_at: string };
+
+type NotificationItem = {
+  id: string;
+  userId: string;
+  actorId: string | null;
+  type: string;
+  content: string;
+  isRead: boolean;
+  createdAt: string;
+  postId: string | null;
+};
+
+type NotificationRow = {
+  id: string;
+  user_id: string;
+  actor_id: string | null;
+  type: string;
+  content: string;
+  is_read: boolean;
+  created_at: string;
+  post_id: string | null;
 };
 
 const now = () => new Date().toISOString();
@@ -279,12 +304,32 @@ const rowToReport = (row: ReportRow): Report => ({
   createdAt: row.created_at,
 });
 
+const rowToFollow = (row: FollowRow): Follow => ({
+  followerId: row.follower_id,
+  followeeId: row.followee_id,
+  createdAt: row.created_at,
+});
+
+const rowToNotification = (row: NotificationRow): NotificationItem => ({
+  id: row.id,
+  userId: row.user_id,
+  actorId: row.actor_id,
+  type: row.type,
+  content: row.content,
+  isRead: row.is_read,
+  createdAt: row.created_at,
+  postId: row.post_id,
+});
+
 export default function HomePage() {
   const [members, setMembers] = useState<Member[]>(seedMembers);
   const [posts, setPosts] = useState<Post[]>(seedPosts);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [reports, setReports] = useState<Report[]>([]);
+  const [follows, setFollows] = useState<Follow[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [currentUserId, setCurrentUserId] = useState("yeonbin");
+  const [selectedProfileId, setSelectedProfileId] = useState("yeonbin");
   const [activeView, setActiveView] = useState<View>("feed");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"全部" | Category>("全部");
@@ -329,12 +374,16 @@ export default function HomePage() {
         members: Member[];
         posts: Post[];
         messages: ChatMessage[];
+        follows?: Follow[];
+        notifications?: NotificationItem[];
         currentUserId: string;
       };
       queueMicrotask(() => {
         setMembers(parsed.members);
         setPosts(parsed.posts);
         setMessages(parsed.messages);
+        setFollows(parsed.follows || []);
+        setNotifications(parsed.notifications || []);
         setCurrentUserId(parsed.currentUserId);
       });
       return;
@@ -358,6 +407,8 @@ export default function HomePage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "follows" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => void loadCloudData())
       .subscribe();
 
     return () => {
@@ -368,8 +419,8 @@ export default function HomePage() {
 
   useEffect(() => {
     if (backendEnabled) return;
-    localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, currentUserId }));
-  }, [backendEnabled, members, posts, messages, currentUserId]);
+    localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, follows, notifications, currentUserId }));
+  }, [backendEnabled, members, posts, messages, follows, notifications, currentUserId]);
 
   useEffect(() => {
     if (!viewerImage) return;
@@ -384,6 +435,12 @@ export default function HomePage() {
   const mustLoginForCloud = backendEnabled && !cloudUserId;
   const isAuthenticated = !backendEnabled || Boolean(cloudUserId);
   const blockedNotice = "你的帳號已被管理員限制發言與發布，請聯絡管理員處理。";
+  const unreadNotifications = notifications.filter((notification) => !notification.isRead).length;
+  const selectedProfile = memberById(members, selectedProfileId);
+  const selectedProfilePosts = posts.filter((post) => post.userId === selectedProfile.id && (!post.isHidden || currentUser.isAdmin || post.userId === currentUserId));
+  const followerCount = (memberId: string) => follows.filter((follow) => follow.followeeId === memberId).length;
+  const followingCount = (memberId: string) => follows.filter((follow) => follow.followerId === memberId).length;
+  const isFollowing = (memberId: string) => follows.some((follow) => follow.followerId === currentUserId && follow.followeeId === memberId);
 
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -400,24 +457,27 @@ export default function HomePage() {
 
   async function loadCloudData() {
     if (!supabase) return;
-    const [profilesResult, postsResult, sessionResult] = await Promise.all([
+    const [profilesResult, postsResult, followsResult, sessionResult] = await Promise.all([
       supabase.from("profiles").select("*").order("created_at", { ascending: false }),
       supabase
         .from("posts")
         .select("*, comments(id,user_id,content,created_at), post_likes(user_id)")
         .order("created_at", { ascending: false }),
+      supabase.from("follows").select("follower_id,followee_id,created_at").order("created_at", { ascending: false }),
       supabase.auth.getSession(),
     ]);
 
-    if (profilesResult.error || postsResult.error) {
+    if (profilesResult.error || postsResult.error || followsResult.error) {
       setNotice("Supabase 已設定，但資料表尚未建立或 RLS 尚未允許讀取。請先執行 supabase/schema.sql。");
       return;
     }
 
     const cloudMembers = ((profilesResult.data || []) as ProfileRow[]).map(profileToMember);
     const cloudPosts = ((postsResult.data || []) as PostRow[]).map(rowToPost);
+    const cloudFollows = ((followsResult.data || []) as FollowRow[]).map(rowToFollow);
     setMembers(cloudMembers.length ? cloudMembers : seedMembers);
     setPosts(cloudPosts.length ? cloudPosts : seedPosts);
+    setFollows(cloudFollows);
 
     const sessionUserId = sessionResult.data.session?.user.id;
     if (sessionUserId) {
@@ -435,9 +495,15 @@ export default function HomePage() {
         .select("id,reason,status,post_id,comment_id,created_at")
         .order("created_at", { ascending: false });
       if (!reportsError) setReports(((reportRows || []) as ReportRow[]).map(rowToReport));
+      const { data: notificationRows, error: notificationsError } = await supabase
+        .from("notifications")
+        .select("id,user_id,actor_id,type,content,is_read,created_at,post_id")
+        .order("created_at", { ascending: false });
+      if (!notificationsError) setNotifications(((notificationRows || []) as NotificationRow[]).map(rowToNotification));
     } else {
       setCloudUserId(null);
       setReports([]);
+      setNotifications([]);
       if (cloudMembers[0]) setCurrentUserId(cloudMembers[0].id);
     }
     setCloudUserId(sessionUserId || null);
@@ -595,6 +661,75 @@ export default function HomePage() {
       setProfileUploading(false);
       event.target.value = "";
     }
+  }
+
+  function openPublicProfile(memberId: string) {
+    setSelectedProfileId(memberId);
+    setActiveView(memberId === currentUserId ? "profile" : "public-profile");
+  }
+
+  async function createNotification(input: { userId: string; type: string; content: string; postId?: string; commentId?: string; messageId?: string }) {
+    if (input.userId === currentUserId) return;
+    if (backendEnabled && supabase && cloudUserId) {
+      await supabase.from("notifications").insert({
+        user_id: input.userId,
+        actor_id: cloudUserId,
+        type: input.type,
+        content: input.content,
+        post_id: input.postId || null,
+        comment_id: input.commentId || null,
+        message_id: input.messageId || null,
+      });
+      return;
+    }
+    setNotifications((list) => [
+      { id: newId(), userId: input.userId, actorId: currentUserId, type: input.type, content: input.content, isRead: false, createdAt: now(), postId: input.postId || null },
+      ...list,
+    ]);
+  }
+
+  async function toggleFollow(member: Member) {
+    if (member.id === currentUserId) return;
+    if (currentUser.isBlocked) {
+      setNotice(blockedNotice);
+      window.alert(blockedNotice);
+      return;
+    }
+    const followed = isFollowing(member.id);
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員後再追蹤。");
+        return;
+      }
+      if (followed) {
+        await supabase.from("follows").delete().eq("follower_id", cloudUserId).eq("followee_id", member.id);
+      } else {
+        const { error } = await supabase.from("follows").insert({ follower_id: cloudUserId, followee_id: member.id });
+        if (error) {
+          setNotice(error.message);
+          return;
+        }
+        await createNotification({ userId: member.id, type: "follow", content: `${currentUser.displayName} 開始追蹤你。` });
+      }
+      await loadCloudData();
+      return;
+    }
+    setFollows((list) =>
+      followed
+        ? list.filter((follow) => !(follow.followerId === currentUserId && follow.followeeId === member.id))
+        : [{ followerId: currentUserId, followeeId: member.id, createdAt: now() }, ...list],
+    );
+    if (!followed) await createNotification({ userId: member.id, type: "follow", content: `${currentUser.displayName} 開始追蹤你。` });
+  }
+
+  async function markNotificationsRead() {
+    if (!notifications.some((notification) => !notification.isRead)) return;
+    if (backendEnabled && supabase && cloudUserId) {
+      await supabase.from("notifications").update({ is_read: true }).eq("user_id", cloudUserId).eq("is_read", false);
+      await loadCloudData();
+      return;
+    }
+    setNotifications((list) => list.map((notification) => ({ ...notification, isRead: true })));
   }
 
   async function createPost(event: FormEvent<HTMLFormElement>) {
@@ -834,6 +969,7 @@ export default function HomePage() {
         await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", cloudUserId);
       } else {
         await supabase.from("post_likes").insert({ post_id: postId, user_id: cloudUserId });
+        await createNotification({ userId: post.userId, type: "like", content: `${currentUser.displayName} 對你的貼文按讚。`, postId });
       }
       await loadCloudData();
       return;
@@ -846,6 +982,7 @@ export default function HomePage() {
           : item,
       ),
     );
+    if (!liked) await createNotification({ userId: post.userId, type: "like", content: `${currentUser.displayName} 對你的貼文按讚。`, postId });
   }
 
   async function addComment(postId: string) {
@@ -867,6 +1004,8 @@ export default function HomePage() {
         setNotice(error.message);
         return;
       }
+      const post = posts.find((item) => item.id === postId);
+      if (post) await createNotification({ userId: post.userId, type: "comment", content: `${currentUser.displayName} 留言了你的貼文。`, postId });
       await loadCloudData();
     } else {
       setPosts((list) =>
@@ -874,6 +1013,8 @@ export default function HomePage() {
           post.id === postId ? { ...post, comments: [...post.comments, { id: newId(), userId: currentUserId, text, createdAt: now() }] } : post,
         ),
       );
+      const post = posts.find((item) => item.id === postId);
+      if (post) await createNotification({ userId: post.userId, type: "comment", content: `${currentUser.displayName} 留言了你的貼文。`, postId });
     }
     setCommentDrafts((drafts) => ({ ...drafts, [postId]: "" }));
   }
@@ -898,9 +1039,11 @@ export default function HomePage() {
         setNotice(error.message);
         return;
       }
+      await createNotification({ userId: chatTarget, type: "message", content: `${currentUser.displayName} 傳了新私訊給你。` });
       await loadCloudData();
     } else {
       setMessages((list) => [...list, nextMessage]);
+      await createNotification({ userId: chatTarget, type: "message", content: `${currentUser.displayName} 傳了新私訊給你。` });
     }
     setChatText("");
   }
@@ -958,8 +1101,13 @@ export default function HomePage() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <button className="icon-button" title="通知" type="button">
+            <button className="icon-button relative" onClick={() => setActiveView("notifications")} title="通知" type="button">
               <Bell size={20} />
+              {unreadNotifications > 0 && (
+                <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#b24731] px-1 text-[0.68rem] font-black text-white">
+                  {unreadNotifications}
+                </span>
+              )}
             </button>
             <img alt={currentUser.displayName} className="h-10 w-10 rounded-full object-cover ring-2 ring-[#98b7a6]" src={currentUser.avatar} />
           </div>
@@ -979,8 +1127,8 @@ export default function HomePage() {
             <p className="mt-4 text-sm leading-6 text-[#5f5750]">{currentUser.bio}</p>
             <div className="mt-5 grid grid-cols-3 gap-2 text-center text-sm">
               <Metric label="貼文" value={posts.filter((post) => post.userId === currentUserId).length} />
-              <Metric label="追蹤" value={18} />
-              <Metric label="粉絲" value={126} />
+              <Metric label="追蹤" value={followingCount(currentUserId)} />
+              <Metric label="粉絲" value={followerCount(currentUserId)} />
             </div>
           </section>
           <section className="panel mt-4">
@@ -1018,6 +1166,9 @@ export default function HomePage() {
                 reportComment={reportComment}
                 reportPost={reportPost}
                 posts={visiblePosts}
+                followerCount={followerCount}
+                isFollowing={isFollowing}
+                openPublicProfile={openPublicProfile}
                 savePostEdit={savePostEdit}
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
@@ -1025,6 +1176,7 @@ export default function HomePage() {
                 setEditPostForm={setEditPostForm}
                 setActiveView={setActiveView}
                 startEditPost={startEditPost}
+                toggleFollow={toggleFollow}
                 togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
@@ -1060,6 +1212,9 @@ export default function HomePage() {
                 reportComment={reportComment}
                 reportPost={reportPost}
                 posts={visiblePosts}
+                followerCount={followerCount}
+                isFollowing={isFollowing}
+                openPublicProfile={openPublicProfile}
                 savePostEdit={savePostEdit}
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
@@ -1067,6 +1222,7 @@ export default function HomePage() {
                 setEditPostForm={setEditPostForm}
                 setActiveView={setActiveView}
                 startEditPost={startEditPost}
+                toggleFollow={toggleFollow}
                 togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
@@ -1284,6 +1440,102 @@ export default function HomePage() {
             </section>
           )}
 
+          {activeView === "public-profile" && (
+            <section className="panel">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                <img alt={selectedProfile.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={selectedProfile.avatar} />
+                <div className="flex-1">
+                  <h1 className="page-title">{selectedProfile.displayName}</h1>
+                  <p className="mt-1 text-sm text-[#7a7168]">@{selectedProfile.username}</p>
+                  <p className="mt-3 text-[#5f5750]">{selectedProfile.bio}</p>
+                  <div className="mt-4 grid max-w-md grid-cols-3 gap-2 text-center text-sm">
+                    <Metric label="貼文" value={selectedProfilePosts.length} />
+                    <Metric label="追蹤" value={followingCount(selectedProfile.id)} />
+                    <Metric label="粉絲" value={followerCount(selectedProfile.id)} />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button" onClick={() => toggleFollow(selectedProfile)} type="button">
+                    <User size={18} />
+                    {isFollowing(selectedProfile.id) ? "追蹤中" : "追蹤"}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      setChatTarget(selectedProfile.id);
+                      setActiveView("messages");
+                    }}
+                    type="button"
+                  >
+                    <MessageCircle size={18} />
+                    私訊
+                  </button>
+                </div>
+              </div>
+              <h2 className="section-title mt-8">公開貼文</h2>
+              <PostList
+                addComment={addComment}
+                commentDrafts={commentDrafts}
+                currentUserId={currentUserId}
+                currentUser={currentUser}
+                deleteComment={deleteComment}
+                deletePost={deletePost}
+                editingPostId={editingPostId}
+                editPostForm={editPostForm}
+                members={members}
+                reportComment={reportComment}
+                reportPost={reportPost}
+                posts={selectedProfilePosts}
+                followerCount={followerCount}
+                isFollowing={isFollowing}
+                openPublicProfile={openPublicProfile}
+                savePostEdit={savePostEdit}
+                setChatTarget={setChatTarget}
+                setCommentDrafts={setCommentDrafts}
+                setEditingPostId={setEditingPostId}
+                setEditPostForm={setEditPostForm}
+                setActiveView={setActiveView}
+                startEditPost={startEditPost}
+                toggleFollow={toggleFollow}
+                togglePostHidden={togglePostHidden}
+                openImageViewer={setViewerImage}
+                toggleLike={toggleLike}
+              />
+            </section>
+          )}
+
+          {activeView === "notifications" && (
+            <section className="panel">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h1 className="page-title">通知中心</h1>
+                  <p className="mt-2 text-sm text-[#7a7168]">{unreadNotifications} 則未讀通知</p>
+                </div>
+                <button className="secondary-button" onClick={markNotificationsRead} type="button">
+                  <Bell size={18} />
+                  全部標為已讀
+                </button>
+              </div>
+              <div className="mt-5 space-y-3">
+                {notifications.length ? notifications.map((notification) => {
+                  const actor = notification.actorId ? memberById(members, notification.actorId) : null;
+                  return (
+                    <div className={`rounded-lg border border-[#e1d7cc] bg-white p-4 ${notification.isRead ? "opacity-70" : ""}`} key={notification.id}>
+                      <div className="flex items-start gap-3">
+                        {actor && <img alt={actor.displayName} className="h-10 w-10 rounded-full object-cover" src={actor.avatar} />}
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold">{notification.content}</p>
+                          <p className="mt-1 text-xs text-[#7a7168]">{new Date(notification.createdAt).toLocaleString("zh-TW")}</p>
+                        </div>
+                        {!notification.isRead && <Badge>未讀</Badge>}
+                      </div>
+                    </div>
+                  );
+                }) : <p className="text-sm text-[#7a7168]">目前沒有通知。</p>}
+              </div>
+            </section>
+          )}
+
           {activeView === "admin" && currentUser.isAdmin && (
             <section className="panel">
               <h1 className="page-title">管理後台</h1>
@@ -1385,12 +1637,16 @@ export default function HomePage() {
             <div className="mt-4 space-y-3">
               {members.filter((member) => member.id !== currentUserId).map((member) => (
                 <div className="flex items-center gap-3" key={member.id}>
-                  <img alt={member.displayName} className="h-10 w-10 rounded-full object-cover" src={member.avatar} />
-                  <div className="min-w-0 flex-1">
+                  <button onClick={() => openPublicProfile(member.id)} type="button">
+                    <img alt={member.displayName} className="h-10 w-10 rounded-full object-cover" src={member.avatar} />
+                  </button>
+                  <button className="min-w-0 flex-1 text-left" onClick={() => openPublicProfile(member.id)} type="button">
                     <p className="truncate font-bold">{member.displayName}</p>
-                    <p className="text-xs text-[#7a7168]">@{member.username}</p>
-                  </div>
-                  <button className="mini-button" type="button">追蹤</button>
+                    <p className="text-xs text-[#7a7168]">@{member.username} · {followerCount(member.id)} 粉絲</p>
+                  </button>
+                  <button className="mini-button" onClick={() => toggleFollow(member)} type="button">
+                    {isFollowing(member.id) ? "追蹤中" : "追蹤"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -1470,6 +1726,10 @@ function PostList(props: {
   setChatTarget: (id: string) => void;
   setActiveView: (view: View) => void;
   startEditPost: (post: Post) => void;
+  openPublicProfile: (memberId: string) => void;
+  toggleFollow: (member: Member) => void;
+  isFollowing: (memberId: string) => boolean;
+  followerCount: (memberId: string) => number;
   togglePostHidden: (post: Post) => void;
   openImageViewer: (image: { src: string; alt: string }) => void;
 }) {
@@ -1486,11 +1746,18 @@ function PostList(props: {
         return (
           <article className="post-card" key={post.id}>
             <div className="flex items-center gap-3 p-4">
-              <img alt={author.displayName} className="h-11 w-11 rounded-full object-cover" src={author.avatar} />
-              <div className="min-w-0 flex-1">
+              <button onClick={() => props.openPublicProfile(author.id)} type="button">
+                <img alt={author.displayName} className="h-11 w-11 rounded-full object-cover" src={author.avatar} />
+              </button>
+              <button className="min-w-0 flex-1 text-left" onClick={() => props.openPublicProfile(author.id)} type="button">
                 <p className="truncate font-black">{author.displayName}</p>
-                <p className="text-xs text-[#7a7168]">{post.category} · {post.status}</p>
-              </div>
+                <p className="text-xs text-[#7a7168]">{post.category} · {post.status} · {props.followerCount(author.id)} 粉絲</p>
+              </button>
+              {!isOwner && (
+                <button className="mini-button" onClick={() => props.toggleFollow(author)} type="button">
+                  {props.isFollowing(author.id) ? "追蹤中" : "追蹤"}
+                </button>
+              )}
               {post.isHidden && <Badge>已隱藏</Badge>}
               <Badge>{post.status}</Badge>
             </div>
