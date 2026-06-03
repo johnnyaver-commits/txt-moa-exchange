@@ -480,9 +480,9 @@ begin
   insert into public.profiles (id, username, display_name, avatar_url)
   values (
     new.id,
-    coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
-    coalesce(new.raw_user_meta_data->>'display_name', new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
-    'https://api.dicebear.com/9.x/thumbs/svg?seed=' || coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1))
+    regexp_replace(lower(split_part(new.email, '@', 1)), '[^a-z0-9._-]', '', 'g') || '_' || left(replace(new.id::text, '-', ''), 6),
+    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
+    'https://api.dicebear.com/9.x/thumbs/svg?seed=' || new.id::text
   )
   on conflict (id) do nothing;
   return new;

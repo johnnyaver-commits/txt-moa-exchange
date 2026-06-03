@@ -300,18 +300,21 @@ const seedMessages: ChatMessage[] = [
 const memberById = (members: Member[], userId: string) =>
   members.find((member) => member.id === userId) ?? members[0];
 
-const authEmail = (username: string) =>
-  username.includes("@") ? username : `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "")}@moa.local`;
+const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+const publicUsernameFromEmail = (email: string, userId: string) => {
+  const localPart = email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 20) || "moa";
+  return `${localPart}_${userId.replace(/-/g, "").slice(0, 6)}`;
+};
 
 const loginErrorMessage = (message?: string) => {
   const normalized = message?.toLowerCase() || "";
   if (normalized.includes("invalid login credentials") || normalized.includes("invalid credentials")) {
-    return "帳號或密碼錯誤，請重新輸入。";
+    return "E-mail 或密碼錯誤，請重新輸入。";
   }
   if (normalized.includes("email not confirmed")) {
     return "Email 尚未驗證，請先到信箱完成驗證。";
   }
-  return message || "登入失敗，請確認帳號與密碼。";
+  return message || "登入失敗，請確認 E-mail 與密碼。";
 };
 
 const profileToMember = (profile: ProfileRow): Member => ({
@@ -432,7 +435,7 @@ export default function HomePage() {
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [followingOnly, setFollowingOnly] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "" });
+  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "" });
   const [postForm, setPostForm] = useState({
     title: "",
     content: "",
@@ -720,7 +723,13 @@ export default function HomePage() {
       return;
     }
 
-    const email = authEmail(authForm.username);
+    const email = authForm.email.trim().toLowerCase();
+    if (!isValidEmail(email)) {
+      const message = "請輸入有效的 E-mail 地址。";
+      setNotice(message);
+      window.alert(message);
+      return;
+    }
     if (authMode === "forgot") {
       const redirectTo = window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
@@ -729,7 +738,7 @@ export default function HomePage() {
         return;
       }
       setNotice("已寄出密碼重設信，請到信箱點擊連結後回到網站設定新密碼。");
-      setAuthForm({ username: "", password: "", displayName: "" });
+      setAuthForm({ email: "", password: "", displayName: "" });
       setAuthMode("login");
       return;
     }
@@ -753,19 +762,20 @@ export default function HomePage() {
     const { data, error } = await supabase.auth.signUp({
       email,
       password: authForm.password,
-      options: { data: { username: authForm.username, display_name: authForm.displayName || authForm.username } },
+      options: { data: { display_name: authForm.displayName || email.split("@")[0] } },
     });
     if (error || !data.user) {
       setNotice(error?.message || "註冊失敗");
       return;
     }
 
+    const publicUsername = publicUsernameFromEmail(email, data.user.id);
     await supabase.from("profiles").upsert({
       id: data.user.id,
-      username: authForm.username,
-      display_name: authForm.displayName || authForm.username,
+      username: publicUsername,
+      display_name: authForm.displayName || email.split("@")[0],
       bio: "新加入的 MOA，正在整理 TXT 收藏。",
-      avatar_url: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(authForm.username)}`,
+      avatar_url: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(publicUsername)}`,
     });
     setCloudUserId(data.user.id);
     setCurrentUserId(data.user.id);
@@ -808,12 +818,17 @@ export default function HomePage() {
   }
 
   function handleDemoAuth() {
+    const email = authForm.email.trim().toLowerCase();
+    if (!isValidEmail(email)) {
+      setNotice("請輸入有效的 E-mail 地址。");
+      return;
+    }
     if (authMode === "forgot") {
       setNotice("Demo 模式不支援寄送重設密碼信，請使用 Supabase 雲端模式。");
       return;
     }
     if (authMode === "login") {
-      const found = members.find((member) => member.username === authForm.username && member.password === authForm.password);
+      const found = members.find((member) => `${member.username}@moa.demo` === email && member.password === authForm.password);
       if (found) {
         setCurrentUserId(found.id);
         setActiveView("feed");
@@ -823,13 +838,14 @@ export default function HomePage() {
       return;
     }
 
+    const newMemberId = newId();
     const newMember: Member = {
-      id: newId(),
-      username: authForm.username,
+      id: newMemberId,
+      username: publicUsernameFromEmail(email, newMemberId),
       password: authForm.password,
-      displayName: authForm.displayName || authForm.username,
+      displayName: authForm.displayName || email.split("@")[0],
       bio: "新加入的 MOA，正在整理 TXT 收藏。",
-      avatar: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(authForm.username)}`,
+      avatar: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(email)}`,
     };
     setMembers((list) => [newMember, ...list]);
     setCurrentUserId(newMember.id);
@@ -1430,7 +1446,7 @@ export default function HomePage() {
     setCloudUserId(null);
     setCurrentUserId(members[0]?.id || "yeonbin");
     setAuthMode("login");
-    setAuthForm({ username: "", password: "", displayName: "" });
+    setAuthForm({ email: "", password: "", displayName: "" });
     setEditingPassword(false);
     setPasswordForm({ password: "", confirmPassword: "" });
     setNotice("已登出。請重新登入後再發佈、留言或私訊。");
@@ -2509,10 +2525,10 @@ function AuthPanel({
   setAuthForm,
   setAuthMode,
 }: {
-  authForm: { username: string; password: string; displayName: string };
+  authForm: { email: string; password: string; displayName: string };
   authMode: AuthMode;
   onAuth: (event: FormEvent<HTMLFormElement>) => void;
-  setAuthForm: (value: { username: string; password: string; displayName: string }) => void;
+  setAuthForm: (value: { email: string; password: string; displayName: string }) => void;
   setAuthMode: (value: AuthMode) => void;
 }) {
   const isForgot = authMode === "forgot";
@@ -2529,7 +2545,15 @@ function AuthPanel({
       </div>
       <label className="input-shell">
         <User size={18} />
-        <input value={authForm.username} onChange={(event) => setAuthForm({ ...authForm, username: event.target.value })} placeholder="帳號或 Email" required />
+        <input
+          autoComplete="email"
+          inputMode="email"
+          type="email"
+          value={authForm.email}
+          onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })}
+          placeholder="E-mail"
+          required
+        />
       </label>
       {authMode === "register" && (
         <label className="input-shell">
