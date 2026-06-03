@@ -698,7 +698,11 @@ export default function HomePage() {
                     <span>{uploading ? "圖片上傳中..." : postForm.image ? "已選擇照片，可重新上傳" : "上傳商品照片"}</span>
                     <input accept="image/*" className="hidden" type="file" onChange={handleImage} />
                   </label>
-                  {postForm.image && <img alt="貼文預覽" className="aspect-[4/3] w-full rounded-lg object-cover" src={postForm.image} />}
+                  {postForm.image && (
+                    <div className="image-frame rounded-lg">
+                      <img alt="貼文預覽" src={postForm.image} />
+                    </div>
+                  )}
                   <p className="text-sm text-[#7a7168]">標題與描述為必填；圖片可選，未上傳時會使用預設圖片。</p>
                   <button className="primary-button disabled:cursor-not-allowed disabled:opacity-60" disabled={uploading} type="submit">
                     <Plus size={19} />
@@ -929,7 +933,9 @@ function PostList(props: {
               </div>
               <Badge>{post.status}</Badge>
             </div>
-            <img alt={post.title} className="aspect-[4/3] w-full object-cover" src={post.image} />
+            <div className="image-frame">
+              <img alt={post.title} src={post.image} />
+            </div>
             <div className="space-y-4 p-4">
               <div>
                 <h2 className="text-xl font-black">{post.title}</h2>
