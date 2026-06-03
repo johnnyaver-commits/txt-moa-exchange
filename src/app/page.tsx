@@ -3,9 +3,12 @@
 import {
   Bell,
   Camera,
-  CheckCircle2,
   Cloud,
   Database,
+  Edit3,
+  Eye,
+  EyeOff,
+  Flag,
   Minus,
   Heart,
   Home,
@@ -18,6 +21,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Sparkles,
+  Trash2,
   X,
   ZoomIn,
   ZoomOut,
@@ -59,6 +63,7 @@ type Post = {
   image: string;
   likes: string[];
   comments: Comment[];
+  isHidden?: boolean;
   createdAt: string;
 };
 
@@ -88,6 +93,7 @@ type PostRow = {
   status: Status;
   tags: string[] | null;
   image_url: string;
+  is_hidden?: boolean;
   created_at: string;
   profiles?: ProfileRow | null;
   comments?: Array<{
@@ -97,6 +103,32 @@ type PostRow = {
     created_at: string;
   }>;
   post_likes?: Array<{ user_id: string }>;
+};
+
+type MessageRow = {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  content: string;
+  created_at: string;
+};
+
+type Report = {
+  id: string;
+  reason: string;
+  status: string;
+  postId: string | null;
+  commentId: string | null;
+  createdAt: string;
+};
+
+type ReportRow = {
+  id: string;
+  reason: string;
+  status: string;
+  post_id: string | null;
+  comment_id: string | null;
+  created_at: string;
 };
 
 const now = () => new Date().toISOString();
@@ -203,6 +235,7 @@ const rowToPost = (row: PostRow): Post => ({
   tags: row.tags || [],
   image: row.image_url,
   likes: row.post_likes?.map((like) => like.user_id) || [],
+  isHidden: Boolean(row.is_hidden),
   comments:
     row.comments?.map((comment) => ({
       id: comment.id,
@@ -213,10 +246,28 @@ const rowToPost = (row: PostRow): Post => ({
   createdAt: row.created_at,
 });
 
+const rowToMessage = (row: MessageRow): ChatMessage => ({
+  id: row.id,
+  from: row.sender_id,
+  to: row.receiver_id,
+  text: row.content,
+  createdAt: row.created_at,
+});
+
+const rowToReport = (row: ReportRow): Report => ({
+  id: row.id,
+  reason: row.reason,
+  status: row.status,
+  postId: row.post_id,
+  commentId: row.comment_id,
+  createdAt: row.created_at,
+});
+
 export default function HomePage() {
   const [members, setMembers] = useState<Member[]>(seedMembers);
   const [posts, setPosts] = useState<Post[]>(seedPosts);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
+  const [reports, setReports] = useState<Report[]>([]);
   const [currentUserId, setCurrentUserId] = useState("yeonbin");
   const [activeView, setActiveView] = useState<View>("feed");
   const [query, setQuery] = useState("");
@@ -231,9 +282,19 @@ export default function HomePage() {
     tags: "",
     image: "",
   });
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostForm, setEditPostForm] = useState({
+    title: "",
+    content: "",
+    category: "CD" as Category,
+    status: "欲交換" as Status,
+    tags: "",
+  });
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [chatTarget, setChatTarget] = useState("moa-sora");
   const [chatText, setChatText] = useState("");
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", avatar: "" });
   const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
   const [uploading, setUploading] = useState(false);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
@@ -266,6 +327,7 @@ export default function HomePage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => void loadCloudData())
       .subscribe();
 
     return () => {
@@ -290,9 +352,11 @@ export default function HomePage() {
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
   const isAuthenticated = !backendEnabled || Boolean(cloudUserId);
+
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
     return posts.filter((post) => {
+      if (post.isHidden && !currentUser.isAdmin) return false;
       const matchesCategory = category === "全部" || post.category === category;
       const author = memberById(members, post.userId);
       const haystack = [post.title, post.content, post.category, post.status, ...post.tags, author.displayName]
@@ -300,7 +364,7 @@ export default function HomePage() {
         .toLowerCase();
       return matchesCategory && (!text || haystack.includes(text));
     });
-  }, [category, members, posts, query]);
+  }, [category, currentUser.isAdmin, members, posts, query]);
 
   async function loadCloudData() {
     if (!supabase) return;
@@ -326,9 +390,22 @@ export default function HomePage() {
     const sessionUserId = sessionResult.data.session?.user.id;
     if (sessionUserId) {
       setCurrentUserId(sessionUserId);
+      const firstChatTarget = cloudMembers.find((member) => member.id !== sessionUserId)?.id;
+      if (firstChatTarget && !cloudMembers.some((member) => member.id === chatTarget)) setChatTarget(firstChatTarget);
       setNotice(`雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`);
+      const { data: messageRows, error: messagesError } = await supabase
+        .from("messages")
+        .select("id,sender_id,receiver_id,content,created_at")
+        .order("created_at", { ascending: true });
+      if (!messagesError) setMessages(((messageRows || []) as MessageRow[]).map(rowToMessage));
+      const { data: reportRows, error: reportsError } = await supabase
+        .from("reports")
+        .select("id,reason,status,post_id,comment_id,created_at")
+        .order("created_at", { ascending: false });
+      if (!reportsError) setReports(((reportRows || []) as ReportRow[]).map(rowToReport));
     } else {
       setCloudUserId(null);
+      setReports([]);
       if (cloudMembers[0]) setCurrentUserId(cloudMembers[0].id);
     }
     setCloudUserId(sessionUserId || null);
@@ -461,6 +538,155 @@ export default function HomePage() {
     setActiveView("feed");
   }
 
+  function startEditPost(post: Post) {
+    setEditingPostId(post.id);
+    setEditPostForm({
+      title: post.title,
+      content: post.content,
+      category: post.category,
+      status: post.status,
+      tags: post.tags.join(", "),
+    });
+  }
+
+  async function savePostEdit(postId: string) {
+    const tags = editPostForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (backendEnabled && supabase) {
+      const { error } = await supabase
+        .from("posts")
+        .update({
+          title: editPostForm.title,
+          content: editPostForm.content,
+          category: editPostForm.category,
+          status: editPostForm.status,
+          tags,
+        })
+        .eq("id", postId);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) =>
+        list.map((post) =>
+          post.id === postId
+            ? { ...post, title: editPostForm.title, content: editPostForm.content, category: editPostForm.category, status: editPostForm.status, tags }
+            : post,
+        ),
+      );
+    }
+    setEditingPostId(null);
+  }
+
+  async function deletePost(postId: string) {
+    if (!window.confirm("確定要刪除這篇貼文嗎？")) return;
+    if (backendEnabled && supabase) {
+      const { error } = await supabase.from("posts").delete().eq("id", postId);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) => list.filter((post) => post.id !== postId));
+    }
+  }
+
+  async function deleteComment(postId: string, commentId: string) {
+    if (!window.confirm("確定要刪除這則留言嗎？")) return;
+    if (backendEnabled && supabase) {
+      const { error } = await supabase.from("comments").delete().eq("id", commentId);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) => list.map((post) => (post.id === postId ? { ...post, comments: post.comments.filter((comment) => comment.id !== commentId) } : post)));
+    }
+  }
+
+  async function reportPost(postId: string) {
+    await createReport({ postId });
+  }
+
+  async function reportComment(commentId: string) {
+    await createReport({ commentId });
+  }
+
+  async function createReport(target: { postId?: string; commentId?: string }) {
+    const reason = window.prompt("請輸入檢舉原因");
+    if (!reason?.trim()) return;
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再檢舉內容。");
+        return;
+      }
+      const { error } = await supabase.from("reports").insert({
+        reporter_id: cloudUserId,
+        post_id: target.postId || null,
+        comment_id: target.commentId || null,
+        reason: reason.trim(),
+      });
+      setNotice(error ? error.message : "已送出檢舉，管理員會進行審核。");
+    } else {
+      setNotice("已送出檢舉。");
+    }
+  }
+
+  async function togglePostHidden(post: Post) {
+    if (!currentUser.isAdmin) return;
+    if (backendEnabled && supabase) {
+      const nextHidden = !post.isHidden;
+      const { error } = await supabase
+        .from("posts")
+        .update({
+          is_hidden: nextHidden,
+          hidden_at: nextHidden ? now() : null,
+          hidden_by: nextHidden ? cloudUserId : null,
+        })
+        .eq("id", post.id);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setPosts((list) => list.map((item) => (item.id === post.id ? { ...item, isHidden: !item.isHidden } : item)));
+    }
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再編輯個人資料。");
+        return;
+      }
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          display_name: profileForm.displayName,
+          bio: profileForm.bio,
+          avatar_url: profileForm.avatar,
+        })
+        .eq("id", cloudUserId);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setMembers((list) =>
+        list.map((member) =>
+          member.id === currentUserId ? { ...member, displayName: profileForm.displayName, bio: profileForm.bio, avatar: profileForm.avatar } : member,
+        ),
+      );
+    }
+    setEditingProfile(false);
+  }
+
   async function toggleLike(postId: string) {
     const post = posts.find((item) => item.id === postId);
     if (!post) return;
@@ -529,9 +755,10 @@ export default function HomePage() {
         setNotice(error.message);
         return;
       }
+      await loadCloudData();
+    } else {
+      setMessages((list) => [...list, nextMessage]);
     }
-
-    setMessages((list) => [...list, nextMessage]);
     setChatText("");
   }
 
@@ -635,11 +862,23 @@ export default function HomePage() {
                 addComment={addComment}
                 commentDrafts={commentDrafts}
                 currentUserId={currentUserId}
+                currentUser={currentUser}
+                deleteComment={deleteComment}
+                deletePost={deletePost}
+                editingPostId={editingPostId}
+                editPostForm={editPostForm}
                 members={members}
+                reportComment={reportComment}
+                reportPost={reportPost}
                 posts={visiblePosts}
+                savePostEdit={savePostEdit}
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
+                setEditingPostId={setEditingPostId}
+                setEditPostForm={setEditPostForm}
                 setActiveView={setActiveView}
+                startEditPost={startEditPost}
+                togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
               />
@@ -665,11 +904,23 @@ export default function HomePage() {
                 addComment={addComment}
                 commentDrafts={commentDrafts}
                 currentUserId={currentUserId}
+                currentUser={currentUser}
+                deleteComment={deleteComment}
+                deletePost={deletePost}
+                editingPostId={editingPostId}
+                editPostForm={editPostForm}
                 members={members}
+                reportComment={reportComment}
+                reportPost={reportPost}
                 posts={visiblePosts}
+                savePostEdit={savePostEdit}
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
+                setEditingPostId={setEditingPostId}
+                setEditPostForm={setEditPostForm}
                 setActiveView={setActiveView}
+                startEditPost={startEditPost}
+                togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
               />
@@ -777,21 +1028,47 @@ export default function HomePage() {
                   />
                 </div>
               ) : (
-                <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-                  <img alt={currentUser.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={currentUser.avatar} />
-                  <div className="flex-1">
-                    <h1 className="page-title">{currentUser.displayName}</h1>
-                    <p className="mt-2 text-[#5f5750]">{currentUser.bio}</p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Badge>公開帳號</Badge>
-                      <Badge>不開放金流</Badge>
-                      <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
+                <div>
+                  <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                    <img alt={currentUser.displayName} className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]" src={currentUser.avatar} />
+                    <div className="flex-1">
+                      <h1 className="page-title">{currentUser.displayName}</h1>
+                      <p className="mt-2 text-[#5f5750]">{currentUser.bio}</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Badge>公開帳號</Badge>
+                        <Badge>不開放金流</Badge>
+                        <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setProfileForm({ displayName: currentUser.displayName, bio: currentUser.bio, avatar: currentUser.avatar });
+                          setEditingProfile((value) => !value);
+                        }}
+                        type="button"
+                      >
+                        <Edit3 size={18} />
+                        編輯資料
+                      </button>
+                      <button className="secondary-button" onClick={signOut} type="button">
+                        <LogOut size={18} />
+                        登出
+                      </button>
                     </div>
                   </div>
-                  <button className="secondary-button" onClick={signOut} type="button">
-                    <LogOut size={18} />
-                    登出
-                  </button>
+                  {editingProfile && (
+                    <form className="mt-6 grid gap-3 rounded-lg bg-[#f3eee7] p-4" onSubmit={saveProfile}>
+                      <input className="field" value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} placeholder="暱稱" />
+                      <textarea className="field min-h-24" value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} placeholder="簡介" />
+                      <input className="field" value={profileForm.avatar} onChange={(event) => setProfileForm({ ...profileForm, avatar: event.target.value })} placeholder="頭像 URL" />
+                      <div className="flex gap-2">
+                        <button className="primary-button" type="submit">儲存資料</button>
+                        <button className="secondary-button" onClick={() => setEditingProfile(false)} type="button">取消</button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
             </section>
@@ -802,19 +1079,31 @@ export default function HomePage() {
               <h1 className="page-title">管理後台</h1>
               <div className="mt-5 grid gap-3 md:grid-cols-3">
                 <AdminCard label="待審核貼文" value="3" />
-                <AdminCard label="檢舉留言" value="1" />
+                <AdminCard label="檢舉內容" value={reports.length.toString()} />
                 <AdminCard label="活躍會員" value={members.length.toString()} />
+              </div>
+              <div className="mt-6">
+                <h2 className="section-title">檢舉列表</h2>
+                <div className="mt-3 space-y-3">
+                  {reports.length ? reports.map((report) => (
+                    <div className="rounded-lg border border-[#e1d7cc] bg-white p-4" key={report.id}>
+                      <p className="font-bold">{report.postId ? "貼文檢舉" : "留言檢舉"} · {report.status}</p>
+                      <p className="mt-1 text-sm text-[#5f5750]">{report.reason}</p>
+                      <p className="mt-1 text-xs text-[#7a7168]">{new Date(report.createdAt).toLocaleString("zh-TW")}</p>
+                    </div>
+                  )) : <p className="text-sm text-[#7a7168]">目前沒有檢舉。</p>}
+                </div>
               </div>
               <div className="mt-6 space-y-3">
                 {posts.map((post) => (
                   <div className="flex items-center justify-between rounded-lg border border-[#e1d7cc] bg-white p-4" key={post.id}>
                     <div>
                       <p className="font-bold">{post.title}</p>
-                      <p className="text-sm text-[#7a7168]">{post.status} · {post.category}</p>
+                      <p className="text-sm text-[#7a7168]">{post.status} · {post.category} · {post.isHidden ? "已隱藏" : "公開"}</p>
                     </div>
-                    <button className="secondary-button" type="button">
-                      <CheckCircle2 size={18} />
-                      通過
+                    <button className="secondary-button" onClick={() => togglePostHidden(post)} type="button">
+                      {post.isHidden ? <Eye size={18} /> : <EyeOff size={18} />}
+                      {post.isHidden ? "解除隱藏" : "隱藏"}
                     </button>
                   </div>
                 ))}
@@ -926,12 +1215,24 @@ function PostList(props: {
   posts: Post[];
   members: Member[];
   currentUserId: string;
+  currentUser: Member;
   commentDrafts: Record<string, string>;
+  editPostForm: { title: string; content: string; category: Category; status: Status; tags: string };
+  editingPostId: string | null;
   setCommentDrafts: (value: Record<string, string>) => void;
+  setEditPostForm: (value: { title: string; content: string; category: Category; status: Status; tags: string }) => void;
+  setEditingPostId: (value: string | null) => void;
   toggleLike: (postId: string) => void;
   addComment: (postId: string) => void;
+  deleteComment: (postId: string, commentId: string) => void;
+  deletePost: (postId: string) => void;
+  reportComment: (commentId: string) => void;
+  reportPost: (postId: string) => void;
+  savePostEdit: (postId: string) => void;
   setChatTarget: (id: string) => void;
   setActiveView: (view: View) => void;
+  startEditPost: (post: Post) => void;
+  togglePostHidden: (post: Post) => void;
   openImageViewer: (image: { src: string; alt: string }) => void;
 }) {
   if (!props.posts.length) {
@@ -942,6 +1243,8 @@ function PostList(props: {
     <div className="mt-4 space-y-5">
       {props.posts.map((post) => {
         const author = memberById(props.members, post.userId);
+        const isOwner = post.userId === props.currentUserId;
+        const isEditing = props.editingPostId === post.id;
         return (
           <article className="post-card" key={post.id}>
             <div className="flex items-center gap-3 p-4">
@@ -950,6 +1253,7 @@ function PostList(props: {
                 <p className="truncate font-black">{author.displayName}</p>
                 <p className="text-xs text-[#7a7168]">{post.category} · {post.status}</p>
               </div>
+              {post.isHidden && <Badge>已隱藏</Badge>}
               <Badge>{post.status}</Badge>
             </div>
             <button className="image-frame image-frame-button" onClick={() => props.openImageViewer({ src: post.image, alt: post.title })} type="button">
@@ -960,12 +1264,64 @@ function PostList(props: {
               </span>
             </button>
             <div className="space-y-4 p-4">
-              <div>
-                <h2 className="text-xl font-black">{post.title}</h2>
-                <p className="mt-2 leading-7 text-[#4c4640]">{post.content}</p>
-              </div>
+              {isEditing ? (
+                <div className="grid gap-3 rounded-lg bg-[#f3eee7] p-3">
+                  <input className="field" value={props.editPostForm.title} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, title: event.target.value })} />
+                  <textarea className="field min-h-24" value={props.editPostForm.content} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, content: event.target.value })} />
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <select className="field" value={props.editPostForm.category} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, category: event.target.value as Category })}>
+                      <option>CD</option>
+                      <option>照片小卡</option>
+                      <option>小物</option>
+                    </select>
+                    <select className="field" value={props.editPostForm.status} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, status: event.target.value as Status })}>
+                      <option>欲交換</option>
+                      <option>徵求</option>
+                      <option>已交換</option>
+                    </select>
+                    <input className="field" value={props.editPostForm.tags} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, tags: event.target.value })} />
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="secondary-button" onClick={() => props.savePostEdit(post.id)} type="button">
+                      儲存
+                    </button>
+                    <button className="secondary-button" onClick={() => props.setEditingPostId(null)} type="button">
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <h2 className="text-xl font-black">{post.title}</h2>
+                  <p className="mt-2 leading-7 text-[#4c4640]">{post.content}</p>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 {post.tags.map((tag) => <Badge key={tag}>#{tag}</Badge>)}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {isOwner && (
+                  <>
+                    <button className="action-button" onClick={() => props.startEditPost(post)} type="button">
+                      <Edit3 size={17} />
+                      編輯
+                    </button>
+                    <button className="action-button" onClick={() => props.deletePost(post.id)} type="button">
+                      <Trash2 size={17} />
+                      刪除
+                    </button>
+                  </>
+                )}
+                <button className="action-button" onClick={() => props.reportPost(post.id)} type="button">
+                  <Flag size={17} />
+                  檢舉
+                </button>
+                {props.currentUser.isAdmin && (
+                  <button className="action-button" onClick={() => props.togglePostHidden(post)} type="button">
+                    {post.isHidden ? <Eye size={17} /> : <EyeOff size={17} />}
+                    {post.isHidden ? "解除隱藏" : "隱藏"}
+                  </button>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button className="action-button" onClick={() => props.toggleLike(post.id)} type="button">
@@ -992,9 +1348,21 @@ function PostList(props: {
                 {post.comments.map((comment) => {
                   const commenter = memberById(props.members, comment.userId);
                   return (
-                    <p className="rounded-lg bg-[#f3eee7] px-3 py-2 text-sm" key={comment.id}>
-                      <b>{commenter.displayName}</b> {comment.text}
-                    </p>
+                    <div className="rounded-lg bg-[#f3eee7] px-3 py-2 text-sm" key={comment.id}>
+                      <p>
+                        <b>{commenter.displayName}</b> {comment.text}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(comment.userId === props.currentUserId || props.currentUser.isAdmin) && (
+                          <button className="mini-button" onClick={() => props.deleteComment(post.id, comment.id)} type="button">
+                            刪除留言
+                          </button>
+                        )}
+                        <button className="mini-button" onClick={() => props.reportComment(comment.id)} type="button">
+                          檢舉留言
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
                 <div className="flex gap-2">

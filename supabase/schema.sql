@@ -19,8 +19,15 @@ create table if not exists public.posts (
   status text not null check (status in ('欲交換', '徵求', '已交換')),
   tags text[] not null default '{}',
   image_url text not null,
+  is_hidden boolean not null default false,
+  hidden_at timestamptz,
+  hidden_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+alter table public.posts add column if not exists is_hidden boolean not null default false;
+alter table public.posts add column if not exists hidden_at timestamptz;
+alter table public.posts add column if not exists hidden_by uuid references public.profiles(id) on delete set null;
 
 create table if not exists public.comments (
   id uuid primary key default gen_random_uuid(),
@@ -45,11 +52,35 @@ create table if not exists public.messages (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.reports (
+  id uuid primary key default gen_random_uuid(),
+  reporter_id uuid not null references public.profiles(id) on delete cascade,
+  post_id uuid references public.posts(id) on delete cascade,
+  comment_id uuid references public.comments(id) on delete cascade,
+  reason text not null,
+  status text not null default 'open' check (status in ('open', 'reviewed', 'dismissed')),
+  created_at timestamptz not null default now(),
+  check (post_id is not null or comment_id is not null)
+);
+
 alter table public.profiles enable row level security;
 alter table public.posts enable row level security;
 alter table public.comments enable row level security;
 alter table public.post_likes enable row level security;
 alter table public.messages enable row level security;
+alter table public.reports enable row level security;
+
+create or replace function public.is_admin(user_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = user_id and is_admin = true
+  );
+$$;
 
 drop policy if exists "Profiles are readable" on public.profiles;
 create policy "Profiles are readable"
@@ -70,7 +101,7 @@ create policy "Users can update their own profile"
 drop policy if exists "Posts are readable" on public.posts;
 create policy "Posts are readable"
   on public.posts for select
-  using (true);
+  using (is_hidden = false or auth.uid() = user_id or public.is_admin(auth.uid()));
 
 drop policy if exists "Users can create posts" on public.posts;
 create policy "Users can create posts"
@@ -80,8 +111,14 @@ create policy "Users can create posts"
 drop policy if exists "Users can update own posts" on public.posts;
 create policy "Users can update own posts"
   on public.posts for update
-  using (auth.uid() = user_id)
+  using (auth.uid() = user_id and is_hidden = false)
   with check (auth.uid() = user_id);
+
+drop policy if exists "Admins can update posts" on public.posts;
+create policy "Admins can update posts"
+  on public.posts for update
+  using (public.is_admin(auth.uid()))
+  with check (public.is_admin(auth.uid()));
 
 drop policy if exists "Users can delete own posts" on public.posts;
 create policy "Users can delete own posts"
@@ -102,6 +139,11 @@ drop policy if exists "Users can delete own comments" on public.comments;
 create policy "Users can delete own comments"
   on public.comments for delete
   using (auth.uid() = user_id);
+
+drop policy if exists "Admins can delete comments" on public.comments;
+create policy "Admins can delete comments"
+  on public.comments for delete
+  using (public.is_admin(auth.uid()));
 
 drop policy if exists "Likes are readable" on public.post_likes;
 create policy "Likes are readable"
@@ -128,6 +170,22 @@ create policy "Users can send messages"
   on public.messages for insert
   with check (auth.uid() = sender_id);
 
+drop policy if exists "Users can create reports" on public.reports;
+create policy "Users can create reports"
+  on public.reports for insert
+  with check (auth.uid() = reporter_id);
+
+drop policy if exists "Admins can read reports" on public.reports;
+create policy "Admins can read reports"
+  on public.reports for select
+  using (public.is_admin(auth.uid()));
+
+drop policy if exists "Admins can update reports" on public.reports;
+create policy "Admins can update reports"
+  on public.reports for update
+  using (public.is_admin(auth.uid()))
+  with check (public.is_admin(auth.uid()));
+
 create or replace function public.create_profile_for_new_user()
 returns trigger
 language plpgsql
@@ -153,5 +211,7 @@ create trigger on_auth_user_created
   for each row execute function public.create_profile_for_new_user();
 
 create index if not exists posts_created_at_idx on public.posts(created_at desc);
+create index if not exists posts_is_hidden_idx on public.posts(is_hidden);
 create index if not exists comments_post_id_idx on public.comments(post_id);
 create index if not exists messages_pair_idx on public.messages(sender_id, receiver_id, created_at desc);
+create index if not exists reports_status_idx on public.reports(status, created_at desc);
