@@ -297,6 +297,7 @@ export default function HomePage() {
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", avatar: "" });
   const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
   const [uploading, setUploading] = useState(false);
+  const [profileUploading, setProfileUploading] = useState(false);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const [viewerImage, setViewerImage] = useState<{ src: string; alt: string } | null>(null);
   const backendEnabled = isSupabaseConfigured && Boolean(supabase);
@@ -492,6 +493,22 @@ export default function HomePage() {
       setNotice("圖片上傳失敗，請確認 Cloudinary upload preset 是否為 unsigned。");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleAvatarImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setProfileUploading(true);
+    try {
+      const imageUrl = await uploadImage(file);
+      setProfileForm((form) => ({ ...form, avatar: imageUrl }));
+      setNotice(isCloudinaryConfigured ? "頭像已上傳到 Cloudinary，請按儲存資料完成更新。" : "頭像已載入預覽，請按儲存資料完成更新。");
+    } catch {
+      setNotice("頭像上傳失敗，請確認 Cloudinary upload preset 是否為 unsigned。");
+    } finally {
+      setProfileUploading(false);
+      event.target.value = "";
     }
   }
 
@@ -1060,11 +1077,29 @@ export default function HomePage() {
                   </div>
                   {editingProfile && (
                     <form className="mt-6 grid gap-3 rounded-lg bg-[#f3eee7] p-4" onSubmit={saveProfile}>
+                      <div className="flex flex-col gap-4 rounded-lg border border-[#d8ccc0] bg-white p-4 sm:flex-row sm:items-center">
+                        <img
+                          alt="頭像預覽"
+                          className="h-24 w-24 rounded-full object-cover ring-4 ring-[#c7ded2]"
+                          src={profileForm.avatar || currentUser.avatar}
+                        />
+                        <div className="flex-1">
+                          <p className="text-sm font-black text-[#4c4640]">更換頭像</p>
+                          <p className="mt-1 text-sm text-[#7a7168]">可直接上傳照片，或在下方貼上圖片 URL。</p>
+                          <label className="secondary-button mt-3 w-fit">
+                            <Camera size={18} />
+                            {profileUploading ? "頭像上傳中..." : "上傳新頭像"}
+                            <input accept="image/*" className="hidden" disabled={profileUploading} type="file" onChange={handleAvatarImage} />
+                          </label>
+                        </div>
+                      </div>
                       <input className="field" value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} placeholder="暱稱" />
                       <textarea className="field min-h-24" value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} placeholder="簡介" />
                       <input className="field" value={profileForm.avatar} onChange={(event) => setProfileForm({ ...profileForm, avatar: event.target.value })} placeholder="頭像 URL" />
                       <div className="flex gap-2">
-                        <button className="primary-button" type="submit">儲存資料</button>
+                        <button className="primary-button disabled:cursor-not-allowed disabled:opacity-60" disabled={profileUploading} type="submit">
+                          {profileUploading ? "等待頭像上傳" : "儲存資料"}
+                        </button>
                         <button className="secondary-button" onClick={() => setEditingProfile(false)} type="button">取消</button>
                       </div>
                     </form>
