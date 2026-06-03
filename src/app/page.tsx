@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Cloud,
   Database,
+  Minus,
   Heart,
   Home,
   Lock,
@@ -17,6 +18,9 @@ import {
   ShieldCheck,
   ShoppingBag,
   Sparkles,
+  X,
+  ZoomIn,
+  ZoomOut,
   User,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
@@ -233,6 +237,7 @@ export default function HomePage() {
   const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
   const [uploading, setUploading] = useState(false);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
+  const [viewerImage, setViewerImage] = useState<{ src: string; alt: string } | null>(null);
   const backendEnabled = isSupabaseConfigured && Boolean(supabase);
 
   useEffect(() => {
@@ -272,6 +277,15 @@ export default function HomePage() {
     if (backendEnabled) return;
     localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, currentUserId }));
   }, [backendEnabled, members, posts, messages, currentUserId]);
+
+  useEffect(() => {
+    if (!viewerImage) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setViewerImage(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [viewerImage]);
 
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
@@ -626,6 +640,7 @@ export default function HomePage() {
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
                 setActiveView={setActiveView}
+                openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
               />
             </>
@@ -655,6 +670,7 @@ export default function HomePage() {
                 setChatTarget={setChatTarget}
                 setCommentDrafts={setCommentDrafts}
                 setActiveView={setActiveView}
+                openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
               />
             </section>
@@ -866,6 +882,8 @@ export default function HomePage() {
           );
         })}
       </nav>
+
+      {viewerImage && <ImageViewer alt={viewerImage.alt} onClose={() => setViewerImage(null)} src={viewerImage.src} />}
     </main>
   );
 }
@@ -914,6 +932,7 @@ function PostList(props: {
   addComment: (postId: string) => void;
   setChatTarget: (id: string) => void;
   setActiveView: (view: View) => void;
+  openImageViewer: (image: { src: string; alt: string }) => void;
 }) {
   if (!props.posts.length) {
     return <div className="panel mt-4 text-center text-[#7a7168]">目前沒有符合條件的交換貼文。</div>;
@@ -933,9 +952,13 @@ function PostList(props: {
               </div>
               <Badge>{post.status}</Badge>
             </div>
-            <div className="image-frame">
+            <button className="image-frame image-frame-button" onClick={() => props.openImageViewer({ src: post.image, alt: post.title })} type="button">
               <img alt={post.title} src={post.image} />
-            </div>
+              <span className="image-frame-hint">
+                <ZoomIn size={16} />
+                放大
+              </span>
+            </button>
             <div className="space-y-4 p-4">
               <div>
                 <h2 className="text-xl font-black">{post.title}</h2>
@@ -990,6 +1013,46 @@ function PostList(props: {
           </article>
         );
       })}
+    </div>
+  );
+}
+
+function ImageViewer({ alt, onClose, src }: { alt: string; onClose: () => void; src: string }) {
+  const [scale, setScale] = useState(1);
+
+  function updateScale(nextScale: number) {
+    setScale(Math.min(4, Math.max(0.5, Number(nextScale.toFixed(2)))));
+  }
+
+  return (
+    <div className="viewer-backdrop" role="dialog" aria-modal="true" aria-label="圖片檢視器">
+      <div className="viewer-toolbar">
+        <button className="viewer-button" onClick={() => updateScale(scale - 0.25)} type="button" title="縮小">
+          <ZoomOut size={18} />
+        </button>
+        <button className="viewer-button viewer-scale" onClick={() => updateScale(1)} type="button" title="重設縮放">
+          {Math.round(scale * 100)}%
+        </button>
+        <button className="viewer-button" onClick={() => updateScale(scale + 0.25)} type="button" title="放大">
+          <ZoomIn size={18} />
+        </button>
+        <button className="viewer-button" onClick={() => updateScale(1)} type="button" title="原始大小">
+          <Minus size={18} />
+        </button>
+        <button className="viewer-button" onClick={onClose} type="button" title="關閉">
+          <X size={18} />
+        </button>
+      </div>
+      <button className="viewer-close-layer" onClick={onClose} aria-label="關閉圖片檢視器" type="button" />
+      <div
+        className="viewer-stage"
+        onWheel={(event) => {
+          event.preventDefault();
+          updateScale(scale + (event.deltaY < 0 ? 0.12 : -0.12));
+        }}
+      >
+        <img alt={alt} className="viewer-image" draggable={false} src={src} style={{ transform: `scale(${scale})` }} />
+      </div>
     </div>
   );
 }

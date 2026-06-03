@@ -46,6 +46,7 @@ button {
 }
 
 .image-frame {
+  position: relative;
   display: flex;
   width: 100%;
   height: min(72vh, 720px);
@@ -56,6 +57,10 @@ button {
   background: #f0e8dd;
 }
 
+.image-frame-button {
+  border: 0;
+}
+
 .image-frame img {
   width: auto;
   height: auto;
@@ -64,10 +69,118 @@ button {
   object-fit: contain;
 }
 
+.image-frame-hint {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  background: rgba(33, 31, 29, 0.78);
+  padding: 7px 10px;
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 900;
+  opacity: 0;
+  transition: 160ms ease;
+}
+
+.image-frame-button:hover .image-frame-hint,
+.image-frame-button:focus-visible .image-frame-hint {
+  opacity: 1;
+}
+
+.viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(20, 18, 16, 0.92);
+}
+
+.viewer-close-layer {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.viewer-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  transform: translateX(-50%);
+  gap: 8px;
+  border-radius: 8px;
+  background: rgba(255, 250, 244, 0.94);
+  padding: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}
+
+.viewer-button {
+  display: inline-grid;
+  min-width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background: #222;
+  color: white;
+  font-weight: 900;
+}
+
+.viewer-scale {
+  min-width: 68px;
+  background: #f0e8dd;
+  color: #211f1d;
+}
+
+.viewer-stage {
+  position: absolute;
+  inset: 72px 20px 20px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center;
+  transition: transform 120ms ease;
+  user-select: none;
+}
+
 @media (max-width: 640px) {
   .image-frame {
     height: min(68vh, 620px);
     min-height: 280px;
+  }
+
+  .image-frame-hint {
+    opacity: 1;
+  }
+
+  .viewer-toolbar {
+    top: 10px;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .viewer-button {
+    min-width: 38px;
+    height: 38px;
+  }
+
+  .viewer-scale {
+    min-width: 58px;
+  }
+
+  .viewer-stage {
+    inset: 62px 8px 14px;
   }
 }
 
