@@ -1043,6 +1043,9 @@ function ImageViewer({ alt, onClose, src }: { alt: string; onClose: () => void; 
           <X size={18} />
         </button>
       </div>
+      <button className="viewer-button viewer-mobile-close" onClick={onClose} type="button" title="關閉">
+        <X size={18} />
+      </button>
       <button className="viewer-close-layer" onClick={onClose} aria-label="關閉圖片檢視器" type="button" />
       <div
         className="viewer-stage"
