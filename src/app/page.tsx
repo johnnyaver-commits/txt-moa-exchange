@@ -217,6 +217,17 @@ const memberById = (members: Member[], userId: string) =>
 const authEmail = (username: string) =>
   username.includes("@") ? username : `${username.toLowerCase().replace(/[^a-z0-9._-]/g, "")}@moa.local`;
 
+const loginErrorMessage = (message?: string) => {
+  const normalized = message?.toLowerCase() || "";
+  if (normalized.includes("invalid login credentials") || normalized.includes("invalid credentials")) {
+    return "帳號或密碼錯誤，請重新輸入。";
+  }
+  if (normalized.includes("email not confirmed")) {
+    return "Email 尚未驗證，請先到信箱完成驗證。";
+  }
+  return message || "登入失敗，請確認帳號與密碼。";
+};
+
 const profileToMember = (profile: ProfileRow): Member => ({
   id: profile.id,
   username: profile.username,
@@ -450,7 +461,10 @@ export default function HomePage() {
     if (authMode === "login") {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password: authForm.password });
       if (error) {
-        setNotice(error.message);
+        const message = loginErrorMessage(error.message);
+        setNotice(message);
+        setAuthForm((form) => ({ ...form, password: "" }));
+        window.alert(message);
         return;
       }
       setCloudUserId(data.user.id);
