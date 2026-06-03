@@ -44,6 +44,7 @@ type Member = {
   bio: string;
   avatar: string;
   isAdmin?: boolean;
+  isBlocked?: boolean;
 };
 
 type Comment = {
@@ -83,6 +84,7 @@ type ProfileRow = {
   bio: string | null;
   avatar_url: string | null;
   is_admin: boolean | null;
+  is_blocked?: boolean | null;
 };
 
 type PostRow = {
@@ -145,6 +147,7 @@ const seedMembers: Member[] = [
     bio: "審核交換貼文、處理檢舉與維護社群安全。",
     avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=240&q=80",
     isAdmin: true,
+    isBlocked: false,
   },
   {
     id: "yeonbin",
@@ -235,6 +238,7 @@ const profileToMember = (profile: ProfileRow): Member => ({
   bio: profile.bio || "正在整理 TXT 收藏。",
   avatar: profile.avatar_url || `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(profile.username)}`,
   isAdmin: Boolean(profile.is_admin),
+  isBlocked: Boolean(profile.is_blocked),
 });
 
 const rowToPost = (row: PostRow): Post => ({
@@ -353,6 +357,7 @@ export default function HomePage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => void loadCloudData())
       .subscribe();
 
     return () => {
@@ -378,6 +383,7 @@ export default function HomePage() {
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
   const isAuthenticated = !backendEnabled || Boolean(cloudUserId);
+  const blockedNotice = "你的帳號已被管理員限制發言與發布，請聯絡管理員處理。";
 
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -593,6 +599,11 @@ export default function HomePage() {
 
   async function createPost(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (currentUser.isBlocked) {
+      setNotice(blockedNotice);
+      window.alert(blockedNotice);
+      return;
+    }
     const nextPost: Post = {
       id: newId(),
       userId: currentUserId,
@@ -753,6 +764,32 @@ export default function HomePage() {
     }
   }
 
+  async function toggleMemberBlocked(member: Member) {
+    if (!currentUser.isAdmin || member.id === currentUserId) return;
+    const nextBlocked = !member.isBlocked;
+    const action = nextBlocked ? "封鎖" : "解除封鎖";
+    if (!window.confirm(`確定要${action} ${member.displayName}？${nextBlocked ? " 封鎖後他將不能發文、留言或私訊。" : ""}`)) return;
+
+    if (backendEnabled && supabase) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          is_blocked: nextBlocked,
+          blocked_at: nextBlocked ? now() : null,
+          blocked_by: nextBlocked ? cloudUserId : null,
+        })
+        .eq("id", member.id);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await loadCloudData();
+    } else {
+      setMembers((list) => list.map((item) => (item.id === member.id ? { ...item, isBlocked: nextBlocked } : item)));
+    }
+    setNotice(`${member.displayName} 已${action}。`);
+  }
+
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (backendEnabled && supabase) {
@@ -814,6 +851,11 @@ export default function HomePage() {
   async function addComment(postId: string) {
     const text = commentDrafts[postId]?.trim();
     if (!text) return;
+    if (currentUser.isBlocked) {
+      setNotice(blockedNotice);
+      window.alert(blockedNotice);
+      return;
+    }
 
     if (backendEnabled && supabase) {
       if (!cloudUserId) {
@@ -839,6 +881,11 @@ export default function HomePage() {
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!chatText.trim()) return;
+    if (currentUser.isBlocked) {
+      setNotice(blockedNotice);
+      window.alert(blockedNotice);
+      return;
+    }
     const nextMessage = { id: newId(), from: currentUserId, to: chatTarget, text: chatText.trim(), createdAt: now() };
 
     if (backendEnabled && supabase) {
@@ -1240,10 +1287,38 @@ export default function HomePage() {
           {activeView === "admin" && currentUser.isAdmin && (
             <section className="panel">
               <h1 className="page-title">管理後台</h1>
-              <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="mt-5 grid gap-3 md:grid-cols-4">
                 <AdminCard label="待審核貼文" value="3" />
                 <AdminCard label="檢舉內容" value={reports.length.toString()} />
-                <AdminCard label="活躍會員" value={members.length.toString()} />
+                <AdminCard label="活躍會員" value={members.filter((member) => !member.isBlocked).length.toString()} />
+                <AdminCard label="已封鎖會員" value={members.filter((member) => member.isBlocked).length.toString()} />
+              </div>
+              <div className="mt-6">
+                <h2 className="section-title">會員權限</h2>
+                <div className="mt-3 space-y-3">
+                  {members.map((member) => (
+                    <div className="flex items-center justify-between rounded-lg border border-[#e1d7cc] bg-white p-4" key={member.id}>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <img alt={member.displayName} className="h-10 w-10 rounded-full object-cover" src={member.avatar} />
+                        <div className="min-w-0">
+                          <p className="truncate font-bold">{member.displayName}</p>
+                          <p className="text-sm text-[#7a7168]">
+                            @{member.username} · {member.isAdmin ? "管理員" : member.isBlocked ? "已封鎖" : "一般會員"}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        className="secondary-button disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={member.id === currentUserId || member.isAdmin}
+                        onClick={() => toggleMemberBlocked(member)}
+                        type="button"
+                      >
+                        <Lock size={18} />
+                        {member.isBlocked ? "解除封鎖" : "禁止發言"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="mt-6">
                 <h2 className="section-title">檢舉列表</h2>

@@ -7,8 +7,15 @@ create table if not exists public.profiles (
   bio text default '正在整理 TXT 收藏。',
   avatar_url text,
   is_admin boolean not null default false,
+  is_blocked boolean not null default false,
+  blocked_at timestamptz,
+  blocked_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists is_blocked boolean not null default false;
+alter table public.profiles add column if not exists blocked_at timestamptz;
+alter table public.profiles add column if not exists blocked_by uuid references public.profiles(id) on delete set null;
 
 create table if not exists public.posts (
   id uuid primary key default gen_random_uuid(),
@@ -82,6 +89,18 @@ as $$
   );
 $$;
 
+create or replace function public.is_blocked(user_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = user_id and is_blocked = true
+  );
+$$;
+
 drop policy if exists "Profiles are readable" on public.profiles;
 create policy "Profiles are readable"
   on public.profiles for select
@@ -95,8 +114,14 @@ create policy "Users can insert their own profile"
 drop policy if exists "Users can update their own profile" on public.profiles;
 create policy "Users can update their own profile"
   on public.profiles for update
-  using (auth.uid() = id)
-  with check (auth.uid() = id);
+  using (auth.uid() = id and is_blocked = false)
+  with check (auth.uid() = id and is_admin = false and is_blocked = false);
+
+drop policy if exists "Admins can update profiles" on public.profiles;
+create policy "Admins can update profiles"
+  on public.profiles for update
+  using (public.is_admin(auth.uid()))
+  with check (public.is_admin(auth.uid()));
 
 drop policy if exists "Posts are readable" on public.posts;
 create policy "Posts are readable"
@@ -106,7 +131,7 @@ create policy "Posts are readable"
 drop policy if exists "Users can create posts" on public.posts;
 create policy "Users can create posts"
   on public.posts for insert
-  with check (auth.uid() = user_id);
+  with check (auth.uid() = user_id and not public.is_blocked(auth.uid()));
 
 drop policy if exists "Users can update own posts" on public.posts;
 create policy "Users can update own posts"
@@ -133,7 +158,7 @@ create policy "Comments are readable"
 drop policy if exists "Users can create comments" on public.comments;
 create policy "Users can create comments"
   on public.comments for insert
-  with check (auth.uid() = user_id);
+  with check (auth.uid() = user_id and not public.is_blocked(auth.uid()));
 
 drop policy if exists "Users can delete own comments" on public.comments;
 create policy "Users can delete own comments"
@@ -168,7 +193,7 @@ create policy "Users can read own conversations"
 drop policy if exists "Users can send messages" on public.messages;
 create policy "Users can send messages"
   on public.messages for insert
-  with check (auth.uid() = sender_id);
+  with check (auth.uid() = sender_id and not public.is_blocked(auth.uid()));
 
 drop policy if exists "Users can create reports" on public.reports;
 create policy "Users can create reports"
@@ -212,6 +237,7 @@ create trigger on_auth_user_created
 
 create index if not exists posts_created_at_idx on public.posts(created_at desc);
 create index if not exists posts_is_hidden_idx on public.posts(is_hidden);
+create index if not exists profiles_is_blocked_idx on public.profiles(is_blocked);
 create index if not exists comments_post_id_idx on public.comments(post_id);
 create index if not exists messages_pair_idx on public.messages(sender_id, receiver_id, created_at desc);
 create index if not exists reports_status_idx on public.reports(status, created_at desc);
