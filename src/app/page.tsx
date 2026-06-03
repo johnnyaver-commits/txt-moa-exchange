@@ -232,6 +232,7 @@ export default function HomePage() {
   const [chatText, setChatText] = useState("");
   const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
   const [uploading, setUploading] = useState(false);
+  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const backendEnabled = isSupabaseConfigured && Boolean(supabase);
 
   useEffect(() => {
@@ -310,7 +311,11 @@ export default function HomePage() {
     if (sessionUserId) {
       setCurrentUserId(sessionUserId);
       setNotice(`雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`);
+    } else {
+      setCloudUserId(null);
+      if (cloudMembers[0]) setCurrentUserId(cloudMembers[0].id);
     }
+    setCloudUserId(sessionUserId || null);
   }
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
@@ -412,8 +417,12 @@ export default function HomePage() {
     };
 
     if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("Supabase 雲端模式已啟用。請先登入會員，再發佈貼文。");
+        return;
+      }
       const { error } = await supabase.from("posts").insert({
-        user_id: currentUserId,
+        user_id: cloudUserId,
         title: nextPost.title,
         content: nextPost.content,
         category: nextPost.category,
@@ -440,10 +449,14 @@ export default function HomePage() {
     const liked = post.likes.includes(currentUserId);
 
     if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再按讚。");
+        return;
+      }
       if (liked) {
-        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", currentUserId);
+        await supabase.from("post_likes").delete().eq("post_id", postId).eq("user_id", cloudUserId);
       } else {
-        await supabase.from("post_likes").insert({ post_id: postId, user_id: currentUserId });
+        await supabase.from("post_likes").insert({ post_id: postId, user_id: cloudUserId });
       }
       await loadCloudData();
       return;
@@ -463,7 +476,11 @@ export default function HomePage() {
     if (!text) return;
 
     if (backendEnabled && supabase) {
-      const { error } = await supabase.from("comments").insert({ post_id: postId, user_id: currentUserId, content: text });
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再留言。");
+        return;
+      }
+      const { error } = await supabase.from("comments").insert({ post_id: postId, user_id: cloudUserId, content: text });
       if (error) {
         setNotice(error.message);
         return;
@@ -485,7 +502,11 @@ export default function HomePage() {
     const nextMessage = { id: newId(), from: currentUserId, to: chatTarget, text: chatText.trim(), createdAt: now() };
 
     if (backendEnabled && supabase) {
-      const { error } = await supabase.from("messages").insert({ sender_id: currentUserId, receiver_id: chatTarget, content: chatText.trim() });
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再傳送私訊。");
+        return;
+      }
+      const { error } = await supabase.from("messages").insert({ sender_id: cloudUserId, receiver_id: chatTarget, content: chatText.trim() });
       if (error) {
         setNotice(error.message);
         return;
@@ -500,6 +521,7 @@ export default function HomePage() {
     if (backendEnabled && supabase) {
       await supabase.auth.signOut();
     }
+    setCloudUserId(null);
     setCurrentUserId("yeonbin");
     setActiveView("feed");
   }

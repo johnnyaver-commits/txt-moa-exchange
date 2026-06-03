@@ -36,6 +36,11 @@ Open http://localhost:3000
 3. 在 Supabase Auth 設定中，若要使用 `帳號@moa.local` 這種示範帳號，建議關閉 email confirmation。
 4. 在 Cloudinary 建立 unsigned upload preset。
 5. 將 `.env.example` 的值填入 `.env.local`，並同步設定到 Vercel Environment Variables。
+6. 如需建立 demo 帳號與初始貼文，可執行：
+
+```bash
+npm run seed:supabase
+```
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=
@@ -55,3 +60,5 @@ npm audit --audit-level=moderate
 ## 備註
 
 未設定環境變數時，資料以 `localStorage` 模擬。設定 Supabase 與 Cloudinary 後，會員、貼文、留言、按讚會使用 Supabase，圖片會上傳到 Cloudinary。
+
+目前 Supabase 可透過 Vercel Marketplace 建立與同步環境變數。Cloudinary 不是本專案 Vercel Marketplace 可直接 provision 的 integration，需到 Cloudinary 建立 unsigned upload preset 後再把 cloud name 與 preset name 加到 Vercel。
