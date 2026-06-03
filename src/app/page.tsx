@@ -34,6 +34,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 type Category = "CD" | "照片小卡" | "小物";
 type Status = "欲交換" | "徵求" | "已交換";
 type View = "feed" | "search" | "create" | "messages" | "profile" | "admin";
+type AuthMode = "login" | "register" | "forgot";
 
 type Member = {
   id: string;
@@ -272,7 +273,7 @@ export default function HomePage() {
   const [activeView, setActiveView] = useState<View>("feed");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"全部" | Category>("全部");
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "" });
   const [postForm, setPostForm] = useState({
     title: "",
@@ -295,6 +296,9 @@ export default function HomePage() {
   const [chatText, setChatText] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "", avatar: "" });
+  const [editingPassword, setEditingPassword] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ password: "", confirmPassword: "" });
+  const [passwordUpdating, setPasswordUpdating] = useState(false);
   const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
   const [uploading, setUploading] = useState(false);
   const [profileUploading, setProfileUploading] = useState(false);
@@ -323,6 +327,15 @@ export default function HomePage() {
 
     const client = supabase;
     void loadCloudData();
+    const { data: authListener } = client.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" && session?.user.id) {
+        setCloudUserId(session.user.id);
+        setCurrentUserId(session.user.id);
+        setActiveView("profile");
+        setEditingPassword(true);
+        setNotice("請設定新密碼。");
+      }
+    });
     const channel = client
       .channel("moa-market-feed")
       .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => void loadCloudData())
@@ -332,6 +345,7 @@ export default function HomePage() {
       .subscribe();
 
     return () => {
+      authListener.subscription.unsubscribe();
       void client.removeChannel(channel);
     };
   }, [backendEnabled]);
@@ -420,6 +434,19 @@ export default function HomePage() {
     }
 
     const email = authEmail(authForm.username);
+    if (authMode === "forgot") {
+      const redirectTo = window.location.origin;
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      setNotice("已寄出密碼重設信，請到信箱點擊連結後回到網站設定新密碼。");
+      setAuthForm({ username: "", password: "", displayName: "" });
+      setAuthMode("login");
+      return;
+    }
+
     if (authMode === "login") {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password: authForm.password });
       if (error) {
@@ -456,7 +483,45 @@ export default function HomePage() {
     setActiveView("feed");
   }
 
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (passwordForm.password.length < 6) {
+      setNotice("新密碼至少需要 6 個字元。");
+      return;
+    }
+    if (passwordForm.password !== passwordForm.confirmPassword) {
+      setNotice("兩次輸入的新密碼不一致。");
+      return;
+    }
+
+    if (backendEnabled && supabase) {
+      setPasswordUpdating(true);
+      try {
+        const { error } = await supabase.auth.updateUser({ password: passwordForm.password });
+        if (error) {
+          setNotice(error.message);
+          return;
+        }
+        setNotice("密碼已更新，之後請使用新密碼登入。");
+      } finally {
+        setPasswordUpdating(false);
+      }
+    } else {
+      setMembers((list) =>
+        list.map((member) => (member.id === currentUserId ? { ...member, password: passwordForm.password } : member)),
+      );
+      setNotice("Demo 密碼已更新。");
+    }
+
+    setPasswordForm({ password: "", confirmPassword: "" });
+    setEditingPassword(false);
+  }
+
   function handleDemoAuth() {
+    if (authMode === "forgot") {
+      setNotice("Demo 模式不支援寄送重設密碼信，請使用 Supabase 雲端模式。");
+      return;
+    }
     if (authMode === "login") {
       const found = members.find((member) => member.username === authForm.username && member.password === authForm.password);
       if (found) {
@@ -787,6 +852,8 @@ export default function HomePage() {
     setCurrentUserId(members[0]?.id || "yeonbin");
     setAuthMode("login");
     setAuthForm({ username: "", password: "", displayName: "" });
+    setEditingPassword(false);
+    setPasswordForm({ password: "", confirmPassword: "" });
     setNotice("已登出。請重新登入後再發佈、留言或私訊。");
     setActiveView("feed");
   }
@@ -1071,6 +1138,17 @@ export default function HomePage() {
                         <Edit3 size={18} />
                         編輯資料
                       </button>
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setPasswordForm({ password: "", confirmPassword: "" });
+                          setEditingPassword((value) => !value);
+                        }}
+                        type="button"
+                      >
+                        <Lock size={18} />
+                        修改密碼
+                      </button>
                       <button className="secondary-button" onClick={signOut} type="button">
                         <LogOut size={18} />
                         登出
@@ -1103,6 +1181,40 @@ export default function HomePage() {
                           {profileUploading ? "等待頭像上傳" : "儲存資料"}
                         </button>
                         <button className="secondary-button" onClick={() => setEditingProfile(false)} type="button">取消</button>
+                      </div>
+                    </form>
+                  )}
+                  {editingPassword && (
+                    <form className="mt-6 grid gap-3 rounded-lg bg-[#f3eee7] p-4" onSubmit={changePassword}>
+                      <div>
+                        <h2 className="section-title">修改密碼</h2>
+                        <p className="mt-1 text-sm text-[#7a7168]">新密碼至少 6 個字元，更新後請使用新密碼登入。</p>
+                      </div>
+                      <label className="input-shell">
+                        <Lock size={18} />
+                        <input
+                          type="password"
+                          value={passwordForm.password}
+                          onChange={(event) => setPasswordForm({ ...passwordForm, password: event.target.value })}
+                          placeholder="新密碼"
+                          required
+                        />
+                      </label>
+                      <label className="input-shell">
+                        <Lock size={18} />
+                        <input
+                          type="password"
+                          value={passwordForm.confirmPassword}
+                          onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })}
+                          placeholder="再次輸入新密碼"
+                          required
+                        />
+                      </label>
+                      <div className="flex gap-2">
+                        <button className="primary-button disabled:cursor-not-allowed disabled:opacity-60" disabled={passwordUpdating} type="submit">
+                          {passwordUpdating ? "更新中" : "更新密碼"}
+                        </button>
+                        <button className="secondary-button" onClick={() => setEditingPassword(false)} type="button">取消</button>
                       </div>
                     </form>
                   )}
@@ -1473,11 +1585,13 @@ function AuthPanel({
   setAuthMode,
 }: {
   authForm: { username: string; password: string; displayName: string };
-  authMode: "login" | "register";
+  authMode: AuthMode;
   onAuth: (event: FormEvent<HTMLFormElement>) => void;
   setAuthForm: (value: { username: string; password: string; displayName: string }) => void;
-  setAuthMode: (value: "login" | "register") => void;
+  setAuthMode: (value: AuthMode) => void;
 }) {
+  const isForgot = authMode === "forgot";
+
   return (
     <form className="mt-4 grid gap-3" onSubmit={onAuth}>
       <div className="grid grid-cols-2 rounded-lg bg-[#ece3d8] p-1 text-sm font-bold">
@@ -1498,13 +1612,25 @@ function AuthPanel({
           <input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="暱稱" />
         </label>
       )}
-      <label className="input-shell">
-        <Lock size={18} />
-        <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} placeholder="密碼" required />
-      </label>
+      {!isForgot && (
+        <label className="input-shell">
+          <Lock size={18} />
+          <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} placeholder="密碼" required />
+        </label>
+      )}
       <button className="primary-button" type="submit">
-        {authMode === "login" ? "登入" : "建立帳號"}
+        {authMode === "forgot" ? "寄送重設密碼信" : authMode === "login" ? "登入" : "建立帳號"}
       </button>
+      {authMode === "login" && (
+        <button className="text-sm font-bold text-[#315c4b]" onClick={() => setAuthMode("forgot")} type="button">
+          忘記密碼？
+        </button>
+      )}
+      {authMode === "forgot" && (
+        <button className="text-sm font-bold text-[#315c4b]" onClick={() => setAuthMode("login")} type="button">
+          返回登入
+        </button>
+      )}
     </form>
   );
 }
