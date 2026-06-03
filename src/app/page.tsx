@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  AlertTriangle,
   Bell,
+  Bookmark,
   Camera,
   Cloud,
   Database,
@@ -21,6 +23,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   Sparkles,
+  Star,
   Trash2,
   X,
   ZoomIn,
@@ -32,7 +35,7 @@ import { isCloudinaryConfigured, uploadImage } from "@/lib/cloudinary";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type Category = "CD" | "照片小卡" | "小物";
-type Status = "欲交換" | "徵求" | "已交換";
+type Status = "欲交換" | "徵求" | "洽談中" | "已保留" | "已完成" | "取消交換" | "已交換";
 type View = "feed" | "search" | "create" | "messages" | "profile" | "public-profile" | "notifications" | "admin";
 type AuthMode = "login" | "register" | "forgot";
 
@@ -79,6 +82,32 @@ type ChatMessage = {
   createdAt: string;
 };
 
+type SavedPost = { postId: string; userId: string; createdAt: string };
+type SavedPostRow = { post_id: string; user_id: string; created_at: string };
+
+type UserBlock = { blockerId: string; blockedId: string; createdAt: string };
+type UserBlockRow = { blocker_id: string; blocked_id: string; created_at: string };
+
+type ExchangeReview = {
+  id: string;
+  postId: string;
+  reviewerId: string;
+  revieweeId: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+};
+
+type ExchangeReviewRow = {
+  id: string;
+  post_id: string;
+  reviewer_id: string;
+  reviewee_id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+};
+
 type ProfileRow = {
   id: string;
   username: string;
@@ -122,19 +151,25 @@ type MessageRow = {
 
 type Report = {
   id: string;
+  reporterId: string;
+  category: string;
   reason: string;
   status: string;
   postId: string | null;
   commentId: string | null;
+  resolution: string | null;
   createdAt: string;
 };
 
 type ReportRow = {
   id: string;
+  reporter_id: string;
+  category: string | null;
   reason: string;
   status: string;
   post_id: string | null;
   comment_id: string | null;
+  resolution: string | null;
   created_at: string;
 };
 
@@ -166,6 +201,10 @@ type NotificationRow = {
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 const fallbackImage = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80";
+const categories = ["CD", "照片小卡", "小物"] as const;
+const postStatuses = ["欲交換", "徵求", "洽談中", "已保留", "已完成", "取消交換", "已交換"] as const;
+const activeExchangeStatuses: Status[] = ["欲交換", "徵求", "洽談中", "已保留"];
+const reportCategories = ["詐騙疑慮", "不實廣告", "不當內容", "重複洗版", "其他"] as const;
 
 const seedMembers: Member[] = [
   {
@@ -303,16 +342,41 @@ const rowToMessage = (row: MessageRow): ChatMessage => ({
 
 const rowToReport = (row: ReportRow): Report => ({
   id: row.id,
+  reporterId: row.reporter_id,
+  category: row.category || "其他",
   reason: row.reason,
   status: row.status,
   postId: row.post_id,
   commentId: row.comment_id,
+  resolution: row.resolution,
+  createdAt: row.created_at,
+});
+
+const rowToSavedPost = (row: SavedPostRow): SavedPost => ({
+  postId: row.post_id,
+  userId: row.user_id,
   createdAt: row.created_at,
 });
 
 const rowToFollow = (row: FollowRow): Follow => ({
   followerId: row.follower_id,
   followeeId: row.followee_id,
+  createdAt: row.created_at,
+});
+
+const rowToUserBlock = (row: UserBlockRow): UserBlock => ({
+  blockerId: row.blocker_id,
+  blockedId: row.blocked_id,
+  createdAt: row.created_at,
+});
+
+const rowToExchangeReview = (row: ExchangeReviewRow): ExchangeReview => ({
+  id: row.id,
+  postId: row.post_id,
+  reviewerId: row.reviewer_id,
+  revieweeId: row.reviewee_id,
+  rating: row.rating,
+  comment: row.comment || "",
   createdAt: row.created_at,
 });
 
@@ -332,13 +396,23 @@ export default function HomePage() {
   const [posts, setPosts] = useState<Post[]>(seedPosts);
   const [messages, setMessages] = useState<ChatMessage[]>(seedMessages);
   const [reports, setReports] = useState<Report[]>([]);
+  const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [follows, setFollows] = useState<Follow[]>([]);
+  const [userBlocks, setUserBlocks] = useState<UserBlock[]>([]);
+  const [exchangeReviews, setExchangeReviews] = useState<ExchangeReview[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [currentUserId, setCurrentUserId] = useState("yeonbin");
   const [selectedProfileId, setSelectedProfileId] = useState("yeonbin");
   const [activeView, setActiveView] = useState<View>("feed");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"全部" | Category>("全部");
+  const [statusFilter, setStatusFilter] = useState<"全部" | Status>("全部");
+  const [memberFilter, setMemberFilter] = useState("");
+  const [idolFilter, setIdolFilter] = useState("");
+  const [albumFilter, setAlbumFilter] = useState("");
+  const [regionFilter, setRegionFilter] = useState("");
+  const [onlyAvailable, setOnlyAvailable] = useState(false);
+  const [followingOnly, setFollowingOnly] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "" });
   const [postForm, setPostForm] = useState({
@@ -382,6 +456,9 @@ export default function HomePage() {
         posts: Post[];
         messages: ChatMessage[];
         follows?: Follow[];
+        savedPosts?: SavedPost[];
+        userBlocks?: UserBlock[];
+        exchangeReviews?: ExchangeReview[];
         notifications?: NotificationItem[];
         currentUserId: string;
       };
@@ -390,6 +467,9 @@ export default function HomePage() {
         setPosts(parsed.posts);
         setMessages(parsed.messages);
         setFollows(parsed.follows || []);
+        setSavedPosts(parsed.savedPosts || []);
+        setUserBlocks(parsed.userBlocks || []);
+        setExchangeReviews(parsed.exchangeReviews || []);
         setNotifications(parsed.notifications || []);
         setCurrentUserId(parsed.currentUserId);
       });
@@ -412,9 +492,12 @@ export default function HomePage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "post_saves" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "follows" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "user_blocks" }, () => void loadCloudData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "exchange_reviews" }, () => void loadCloudData())
       .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => void loadCloudData())
       .subscribe();
 
@@ -426,8 +509,8 @@ export default function HomePage() {
 
   useEffect(() => {
     if (backendEnabled) return;
-    localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, follows, notifications, currentUserId }));
-  }, [backendEnabled, members, posts, messages, follows, notifications, currentUserId]);
+    localStorage.setItem("txt-moa-state", JSON.stringify({ members, posts, messages, follows, savedPosts, userBlocks, exchangeReviews, notifications, currentUserId }));
+  }, [backendEnabled, members, posts, messages, follows, savedPosts, userBlocks, exchangeReviews, notifications, currentUserId]);
 
   useEffect(() => {
     if (!viewerImage) return;
@@ -461,10 +544,20 @@ export default function HomePage() {
   const followerCount = (memberId: string) => follows.filter((follow) => follow.followeeId === memberId).length;
   const followingCount = (memberId: string) => follows.filter((follow) => follow.followerId === memberId).length;
   const isFollowing = (memberId: string) => follows.some((follow) => follow.followerId === currentUserId && follow.followeeId === memberId);
+  const isSaved = (postId: string) => savedPosts.some((save) => save.userId === currentUserId && save.postId === postId);
+  const isBlockedByMe = (memberId: string) => userBlocks.some((block) => block.blockerId === currentUserId && block.blockedId === memberId);
+  const isMutuallyBlocked = (memberId: string) =>
+    userBlocks.some((block) => [block.blockerId, block.blockedId].includes(currentUserId) && [block.blockerId, block.blockedId].includes(memberId));
+  const reviewsForUser = (memberId: string) => exchangeReviews.filter((review) => review.revieweeId === memberId);
+  const averageRating = (memberId: string) => {
+    const list = reviewsForUser(memberId);
+    if (!list.length) return "尚無";
+    return (list.reduce((sum, review) => sum + review.rating, 0) / list.length).toFixed(1);
+  };
   const conversationMessages = messages.filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(chatTarget));
   const chatPartner = memberById(members, chatTarget);
   const chatPost = chatPostId ? posts.find((post) => post.id === chatPostId) || null : null;
-  const isChatBlocked = Boolean(currentUser.isBlocked || chatPartner?.isBlocked);
+  const isChatBlocked = Boolean(currentUser.isBlocked || chatPartner?.isBlocked || isMutuallyBlocked(chatTarget));
   const unreadMessageCount = (memberId?: string) =>
     messages.filter((message) => message.to === currentUserId && !message.readAt && (!memberId || message.from === memberId)).length;
   const chatMembers = members
@@ -480,26 +573,41 @@ export default function HomePage() {
 
   const visiblePosts = useMemo(() => {
     const text = query.trim().toLowerCase();
+    const memberText = memberFilter.trim().toLowerCase();
+    const idolText = idolFilter.trim().toLowerCase();
+    const albumText = albumFilter.trim().toLowerCase();
+    const regionText = regionFilter.trim().toLowerCase();
+    const followingIds = new Set(follows.filter((follow) => follow.followerId === currentUserId).map((follow) => follow.followeeId));
     return posts.filter((post) => {
       if (post.isHidden && !currentUser.isAdmin) return false;
+      if (text === "saved:me" && !savedPosts.some((save) => save.userId === currentUserId && save.postId === post.id)) return false;
       const matchesCategory = category === "全部" || post.category === category;
+      const matchesStatus = statusFilter === "全部" || post.status === statusFilter;
+      const matchesAvailable = !onlyAvailable || activeExchangeStatuses.includes(post.status);
+      const matchesFollowing = !followingOnly || followingIds.has(post.userId);
       const author = memberById(members, post.userId);
-      const haystack = [post.title, post.content, post.category, post.status, ...post.tags, author.displayName]
+      const haystack = [post.title, post.content, post.category, post.status, ...post.tags, author.displayName, author.username, author.bio]
         .join(" ")
         .toLowerCase();
-      return matchesCategory && (!text || haystack.includes(text));
+      const matchesText = !text || text === "saved:me" || haystack.includes(text);
+      const matchesMember = !memberText || author.displayName.toLowerCase().includes(memberText) || author.username.toLowerCase().includes(memberText);
+      const matchesIdol = !idolText || haystack.includes(idolText);
+      const matchesAlbum = !albumText || haystack.includes(albumText);
+      const matchesRegion = !regionText || haystack.includes(regionText);
+      return matchesCategory && matchesStatus && matchesAvailable && matchesFollowing && matchesText && matchesMember && matchesIdol && matchesAlbum && matchesRegion;
     });
-  }, [category, currentUser.isAdmin, members, posts, query]);
+  }, [albumFilter, category, currentUser.isAdmin, currentUserId, followingOnly, follows, idolFilter, memberFilter, members, onlyAvailable, posts, query, regionFilter, savedPosts, statusFilter]);
 
   async function loadCloudData() {
     if (!supabase) return;
-    const [profilesResult, postsResult, followsResult, sessionResult] = await Promise.all([
+    const [profilesResult, postsResult, followsResult, reviewsResult, sessionResult] = await Promise.all([
       supabase.from("profiles").select("*").order("created_at", { ascending: false }),
       supabase
         .from("posts")
         .select("*, comments(id,user_id,content,created_at), post_likes(user_id)")
         .order("created_at", { ascending: false }),
       supabase.from("follows").select("follower_id,followee_id,created_at").order("created_at", { ascending: false }),
+      supabase.from("exchange_reviews").select("id,post_id,reviewer_id,reviewee_id,rating,comment,created_at").order("created_at", { ascending: false }),
       supabase.auth.getSession(),
     ]);
 
@@ -511,9 +619,11 @@ export default function HomePage() {
     const cloudMembers = ((profilesResult.data || []) as ProfileRow[]).map(profileToMember);
     const cloudPosts = ((postsResult.data || []) as PostRow[]).map(rowToPost);
     const cloudFollows = ((followsResult.data || []) as FollowRow[]).map(rowToFollow);
+    const cloudReviews = ((reviewsResult.data || []) as ExchangeReviewRow[]).map(rowToExchangeReview);
     setMembers(cloudMembers.length ? cloudMembers : seedMembers);
     setPosts(cloudPosts.length ? cloudPosts : seedPosts);
     setFollows(cloudFollows);
+    setExchangeReviews(cloudReviews);
 
     const sessionUserId = sessionResult.data.session?.user.id;
     if (sessionUserId) {
@@ -528,9 +638,19 @@ export default function HomePage() {
       if (!messagesError) setMessages(((messageRows || []) as MessageRow[]).map(rowToMessage));
       const { data: reportRows, error: reportsError } = await supabase
         .from("reports")
-        .select("id,reason,status,post_id,comment_id,created_at")
+        .select("id,reporter_id,category,reason,status,post_id,comment_id,resolution,created_at")
         .order("created_at", { ascending: false });
       if (!reportsError) setReports(((reportRows || []) as ReportRow[]).map(rowToReport));
+      const { data: savedRows, error: savedError } = await supabase
+        .from("post_saves")
+        .select("post_id,user_id,created_at")
+        .order("created_at", { ascending: false });
+      if (!savedError) setSavedPosts(((savedRows || []) as SavedPostRow[]).map(rowToSavedPost));
+      const { data: blockRows, error: blockError } = await supabase
+        .from("user_blocks")
+        .select("blocker_id,blocked_id,created_at")
+        .order("created_at", { ascending: false });
+      if (!blockError) setUserBlocks(((blockRows || []) as UserBlockRow[]).map(rowToUserBlock));
       const { data: notificationRows, error: notificationsError } = await supabase
         .from("notifications")
         .select("id,user_id,actor_id,type,content,is_read,created_at,post_id")
@@ -539,6 +659,8 @@ export default function HomePage() {
     } else {
       setCloudUserId(null);
       setReports([]);
+      setSavedPosts([]);
+      setUserBlocks([]);
       setNotifications([]);
       if (cloudMembers[0]) setCurrentUserId(cloudMembers[0].id);
     }
@@ -764,6 +886,116 @@ export default function HomePage() {
     if (!followed) await createNotification({ userId: member.id, type: "follow", content: `${currentUser.displayName} 開始追蹤你。` });
   }
 
+  async function toggleSavePost(post: Post) {
+    if (currentUser.isBlocked) {
+      setNotice(blockedNotice);
+      window.alert(blockedNotice);
+      return;
+    }
+    const saved = isSaved(post.id);
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再收藏貼文。");
+        return;
+      }
+      if (saved) {
+        await supabase.from("post_saves").delete().eq("post_id", post.id).eq("user_id", cloudUserId);
+      } else {
+        const { error } = await supabase.from("post_saves").insert({ post_id: post.id, user_id: cloudUserId });
+        if (error) {
+          setNotice(error.message);
+          return;
+        }
+        await createNotification({ userId: post.userId, type: "save", content: `${currentUser.displayName} 收藏了你的貼文。`, postId: post.id });
+      }
+      await loadCloudData();
+      return;
+    }
+    setSavedPosts((list) =>
+      saved
+        ? list.filter((save) => !(save.postId === post.id && save.userId === currentUserId))
+        : [{ postId: post.id, userId: currentUserId, createdAt: now() }, ...list],
+    );
+  }
+
+  async function toggleUserBlock(member: Member) {
+    if (member.id === currentUserId) return;
+    const blocked = isBlockedByMe(member.id);
+    if (!window.confirm(`${blocked ? "解除黑名單" : "加入黑名單"} ${member.displayName}？${blocked ? "" : "加入後雙方將不能私訊。"}`)) return;
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再管理黑名單。");
+        return;
+      }
+      if (blocked) {
+        await supabase.from("user_blocks").delete().eq("blocker_id", cloudUserId).eq("blocked_id", member.id);
+      } else {
+        const { error } = await supabase.from("user_blocks").insert({ blocker_id: cloudUserId, blocked_id: member.id });
+        if (error) {
+          setNotice(error.message);
+          return;
+        }
+      }
+      await loadCloudData();
+      return;
+    }
+    setUserBlocks((list) =>
+      blocked
+        ? list.filter((block) => !(block.blockerId === currentUserId && block.blockedId === member.id))
+        : [{ blockerId: currentUserId, blockedId: member.id, createdAt: now() }, ...list],
+    );
+  }
+
+  async function submitExchangeReview(post: Post) {
+    if (post.userId === currentUserId) return;
+    if (!["已完成", "已交換"].includes(post.status)) {
+      setNotice("只有已完成的交換貼文可以評價。");
+      return;
+    }
+    const existing = exchangeReviews.find((review) => review.postId === post.id && review.reviewerId === currentUserId && review.revieweeId === post.userId);
+    const ratingText = window.prompt("請輸入 1-5 星評價", existing?.rating.toString() || "5");
+    if (!ratingText) return;
+    const rating = Number(ratingText);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      setNotice("評價星等需為 1 到 5。");
+      return;
+    }
+    const comment = window.prompt("請輸入評價內容（可留空）", existing?.comment || "") || "";
+    if (backendEnabled && supabase) {
+      if (!cloudUserId) {
+        setNotice("請先登入會員，再留下評價。");
+        return;
+      }
+      const { error } = await supabase.from("exchange_reviews").upsert(
+        {
+          post_id: post.id,
+          reviewer_id: cloudUserId,
+          reviewee_id: post.userId,
+          rating,
+          comment: comment.trim(),
+        },
+        { onConflict: "post_id,reviewer_id,reviewee_id" },
+      );
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      await createNotification({ userId: post.userId, type: "review", content: `${currentUser.displayName} 完成了一則交換評價。`, postId: post.id });
+      await loadCloudData();
+      return;
+    }
+    const nextReview: ExchangeReview = {
+      id: existing?.id || newId(),
+      postId: post.id,
+      reviewerId: currentUserId,
+      revieweeId: post.userId,
+      rating,
+      comment: comment.trim(),
+      createdAt: existing?.createdAt || now(),
+    };
+    setExchangeReviews((list) => [nextReview, ...list.filter((review) => review.id !== nextReview.id)]);
+  }
+
   async function markNotificationsRead() {
     if (!notifications.some((notification) => !notification.isRead)) return;
     if (backendEnabled && supabase && cloudUserId) {
@@ -900,7 +1132,10 @@ export default function HomePage() {
   }
 
   async function createReport(target: { postId?: string; commentId?: string }) {
-    const reason = window.prompt("請輸入檢舉原因");
+    const categoryInput = window.prompt(`請選擇檢舉分類：${reportCategories.join(" / ")}`, "不實廣告");
+    if (!categoryInput?.trim()) return;
+    const category = reportCategories.includes(categoryInput.trim() as (typeof reportCategories)[number]) ? categoryInput.trim() : "其他";
+    const reason = window.prompt("請輸入檢舉原因補充");
     if (!reason?.trim()) return;
     if (backendEnabled && supabase) {
       if (!cloudUserId) {
@@ -911,12 +1146,43 @@ export default function HomePage() {
         reporter_id: cloudUserId,
         post_id: target.postId || null,
         comment_id: target.commentId || null,
+        category,
         reason: reason.trim(),
       });
       setNotice(error ? error.message : "已送出檢舉，管理員會進行審核。");
     } else {
       setNotice("已送出檢舉。");
     }
+  }
+
+  async function resolveReport(report: Report, status: "reviewed" | "dismissed") {
+    if (!currentUser.isAdmin) return;
+    const resolution = window.prompt(status === "reviewed" ? "請輸入處理結果，例如：已隱藏內容 / 已提醒會員" : "請輸入駁回原因", status === "reviewed" ? "已處理" : "未違反規範");
+    if (!resolution?.trim()) return;
+    if (backendEnabled && supabase) {
+      const { error } = await supabase
+        .from("reports")
+        .update({ status, handled_at: now(), handled_by: cloudUserId, resolution: resolution.trim() })
+        .eq("id", report.id);
+      if (error) {
+        setNotice(error.message);
+        return;
+      }
+      if (status === "reviewed" && report.postId) {
+        await supabase.from("posts").update({ is_hidden: true, hidden_at: now(), hidden_by: cloudUserId }).eq("id", report.postId);
+      }
+      await createNotification({
+        userId: report.reporterId,
+        type: "report_result",
+        content: status === "reviewed" ? `你的檢舉已處理：${resolution.trim()}` : `你的檢舉已駁回：${resolution.trim()}`,
+        postId: report.postId || undefined,
+        commentId: report.commentId || undefined,
+      });
+      await loadCloudData();
+      return;
+    }
+    setReports((list) => list.map((item) => (item.id === report.id ? { ...item, status, resolution: resolution.trim() } : item)));
+    if (status === "reviewed" && report.postId) setPosts((list) => list.map((post) => (post.id === report.postId ? { ...post, isHidden: true } : post)));
   }
 
   async function togglePostHidden(post: Post) {
@@ -1065,7 +1331,11 @@ export default function HomePage() {
     event.preventDefault();
     if (!chatText.trim()) return;
     if (isChatBlocked) {
-      const message = currentUser.isBlocked ? blockedNotice : "對方帳號目前已被管理員限制，暫時不能私訊。";
+      const message = currentUser.isBlocked
+        ? blockedNotice
+        : isMutuallyBlocked(chatTarget)
+          ? "你或對方已將彼此加入黑名單，暫時不能私訊。"
+          : "對方帳號目前已被管理員限制，暫時不能私訊。";
       setNotice(message);
       window.alert(message);
       return;
@@ -1182,12 +1452,27 @@ export default function HomePage() {
           </section>
           <section className="panel mt-4">
             <h2 className="section-title">交換分類</h2>
-            {(["全部", "CD", "照片小卡", "小物"] as const).map((item) => (
+            {(["全部", ...categories] as const).map((item) => (
               <button className={`filter-row ${category === item ? "filter-row-active" : ""}`} key={item} onClick={() => setCategory(item)} type="button">
                 <ShoppingBag size={18} />
                 {item}
               </button>
             ))}
+          </section>
+          <section className="panel mt-4">
+            <h2 className="section-title">快速篩選</h2>
+            <label className="mt-3 flex items-center gap-2 text-sm font-bold text-[#5f5750]">
+              <input checked={onlyAvailable} onChange={(event) => setOnlyAvailable(event.target.checked)} type="checkbox" />
+              只看可交換
+            </label>
+            <label className="mt-3 flex items-center gap-2 text-sm font-bold text-[#5f5750]">
+              <input checked={followingOnly} onChange={(event) => setFollowingOnly(event.target.checked)} type="checkbox" />
+              只看已追蹤帳號
+            </label>
+            <button className="filter-row" onClick={() => setQuery("saved:me")} type="button">
+              <Bookmark size={18} />
+              我的收藏
+            </button>
           </section>
         </aside>
 
@@ -1224,6 +1509,11 @@ export default function HomePage() {
                 togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
+                toggleSavePost={toggleSavePost}
+                isSaved={isSaved}
+                reviewsForUser={reviewsForUser}
+                averageRating={averageRating}
+                submitExchangeReview={submitExchangeReview}
               />
             </>
           )}
@@ -1231,17 +1521,38 @@ export default function HomePage() {
           {activeView === "search" && (
             <section className="panel">
               <h1 className="page-title">搜尋 TXT 周邊</h1>
-              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px]">
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_180px]">
                 <label className="input-shell">
                   <Search size={18} />
                   <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋成員、標籤、商品狀態" />
                 </label>
                 <select className="select-shell" value={category} onChange={(event) => setCategory(event.target.value as "全部" | Category)}>
                   <option>全部</option>
-                  <option>CD</option>
-                  <option>照片小卡</option>
-                  <option>小物</option>
+                  {categories.map((item) => <option key={item}>{item}</option>)}
                 </select>
+                <select className="select-shell" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "全部" | Status)}>
+                  <option>全部</option>
+                  {postStatuses.map((item) => <option key={item}>{item}</option>)}
+                </select>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-4">
+                <input className="field" value={memberFilter} onChange={(event) => setMemberFilter(event.target.value)} placeholder="依成員帳號/暱稱" />
+                <input className="field" value={idolFilter} onChange={(event) => setIdolFilter(event.target.value)} placeholder="依團員，例如 Soobin" />
+                <input className="field" value={albumFilter} onChange={(event) => setAlbumFilter(event.target.value)} placeholder="依專輯，例如 Blue Hour" />
+                <input className="field" value={regionFilter} onChange={(event) => setRegionFilter(event.target.value)} placeholder="依地區，例如 台北" />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-3 text-sm font-bold text-[#5f5750]">
+                <label className="inline-flex items-center gap-2">
+                  <input checked={onlyAvailable} onChange={(event) => setOnlyAvailable(event.target.checked)} type="checkbox" />
+                  只看可交換
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input checked={followingOnly} onChange={(event) => setFollowingOnly(event.target.checked)} type="checkbox" />
+                  只看已追蹤帳號
+                </label>
+                <button className="mini-button" onClick={() => setQuery(query === "saved:me" ? "" : "saved:me")} type="button">
+                  {query === "saved:me" ? "取消收藏篩選" : "只看我的收藏"}
+                </button>
               </div>
               <PostList
                 addComment={addComment}
@@ -1270,6 +1581,11 @@ export default function HomePage() {
                 togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
+                toggleSavePost={toggleSavePost}
+                isSaved={isSaved}
+                reviewsForUser={reviewsForUser}
+                averageRating={averageRating}
+                submitExchangeReview={submitExchangeReview}
               />
             </section>
           )}
@@ -1296,14 +1612,10 @@ export default function HomePage() {
                   <textarea className="field min-h-28" required value={postForm.content} onChange={(event) => setPostForm({ ...postForm, content: event.target.value })} placeholder="描述保存狀況、希望交換品項、面交/寄送方式" />
                   <div className="grid gap-3 sm:grid-cols-3">
                     <select className="field" value={postForm.category} onChange={(event) => setPostForm({ ...postForm, category: event.target.value as Category })}>
-                      <option>CD</option>
-                      <option>照片小卡</option>
-                      <option>小物</option>
+                      {categories.map((item) => <option key={item}>{item}</option>)}
                     </select>
                     <select className="field" value={postForm.status} onChange={(event) => setPostForm({ ...postForm, status: event.target.value as Status })}>
-                      <option>欲交換</option>
-                      <option>徵求</option>
-                      <option>已交換</option>
+                      {postStatuses.map((item) => <option key={item}>{item}</option>)}
                     </select>
                     <input className="field" value={postForm.tags} onChange={(event) => setPostForm({ ...postForm, tags: event.target.value })} placeholder="標籤，以逗號分隔" />
                   </div>
@@ -1524,11 +1836,13 @@ export default function HomePage() {
                   <h1 className="page-title">{selectedProfile.displayName}</h1>
                   <p className="mt-1 text-sm text-[#7a7168]">@{selectedProfile.username}</p>
                   <p className="mt-3 text-[#5f5750]">{selectedProfile.bio}</p>
-                  <div className="mt-4 grid max-w-md grid-cols-3 gap-2 text-center text-sm">
+                  <div className="mt-4 grid max-w-xl grid-cols-4 gap-2 text-center text-sm">
                     <Metric label="貼文" value={selectedProfilePosts.length} />
                     <Metric label="追蹤" value={followingCount(selectedProfile.id)} />
                     <Metric label="粉絲" value={followerCount(selectedProfile.id)} />
+                    <Metric label="信用" value={`${averageRating(selectedProfile.id)} / ${reviewsForUser(selectedProfile.id).length}`} />
                   </div>
+                  {isBlockedByMe(selectedProfile.id) && <p className="mt-3 rounded-lg bg-[#f3eee7] px-3 py-2 text-sm font-bold text-[#8a3f3f]">你已將此會員加入黑名單。</p>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button className="secondary-button" onClick={() => toggleFollow(selectedProfile)} type="button">
@@ -1545,8 +1859,30 @@ export default function HomePage() {
                     <MessageCircle size={18} />
                     私訊
                   </button>
+                  <button className="secondary-button" onClick={() => toggleUserBlock(selectedProfile)} type="button">
+                    <AlertTriangle size={18} />
+                    {isBlockedByMe(selectedProfile.id) ? "解除黑名單" : "加入黑名單"}
+                  </button>
                 </div>
               </div>
+              {reviewsForUser(selectedProfile.id).length > 0 && (
+                <div className="mt-6 rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">交換評價</h2>
+                  <div className="mt-3 space-y-3">
+                    {reviewsForUser(selectedProfile.id).slice(0, 5).map((review) => {
+                      const reviewer = memberById(members, review.reviewerId);
+                      const reviewPost = posts.find((post) => post.id === review.postId);
+                      return (
+                        <div className="rounded-lg bg-[#f3eee7] p-3 text-sm" key={review.id}>
+                          <p className="font-bold">{review.rating} 星 · {reviewer.displayName}</p>
+                          {reviewPost && <p className="mt-1 text-[#7a7168]">{reviewPost.title}</p>}
+                          {review.comment && <p className="mt-1 text-[#4c4640]">{review.comment}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <h2 className="section-title mt-8">公開貼文</h2>
               <PostList
                 addComment={addComment}
@@ -1575,6 +1911,11 @@ export default function HomePage() {
                 togglePostHidden={togglePostHidden}
                 openImageViewer={setViewerImage}
                 toggleLike={toggleLike}
+                toggleSavePost={toggleSavePost}
+                isSaved={isSaved}
+                reviewsForUser={reviewsForUser}
+                averageRating={averageRating}
+                submitExchangeReview={submitExchangeReview}
               />
             </section>
           )}
@@ -1616,7 +1957,7 @@ export default function HomePage() {
               <h1 className="page-title">管理後台</h1>
               <div className="mt-5 grid gap-3 md:grid-cols-4">
                 <AdminCard label="待審核貼文" value="3" />
-                <AdminCard label="檢舉內容" value={reports.length.toString()} />
+                <AdminCard label="待處理檢舉" value={reports.filter((report) => report.status === "open").length.toString()} />
                 <AdminCard label="活躍會員" value={members.filter((member) => !member.isBlocked).length.toString()} />
                 <AdminCard label="已封鎖會員" value={members.filter((member) => member.isBlocked).length.toString()} />
               </div>
@@ -1652,9 +1993,22 @@ export default function HomePage() {
                 <div className="mt-3 space-y-3">
                   {reports.length ? reports.map((report) => (
                     <div className="rounded-lg border border-[#e1d7cc] bg-white p-4" key={report.id}>
-                      <p className="font-bold">{report.postId ? "貼文檢舉" : "留言檢舉"} · {report.status}</p>
+                      <p className="font-bold">{report.postId ? "貼文檢舉" : "留言檢舉"} · {report.category} · {report.status}</p>
                       <p className="mt-1 text-sm text-[#5f5750]">{report.reason}</p>
+                      {report.resolution && <p className="mt-1 text-sm font-bold text-[#315c4b]">處理結果：{report.resolution}</p>}
                       <p className="mt-1 text-xs text-[#7a7168]">{new Date(report.createdAt).toLocaleString("zh-TW")}</p>
+                      {report.status === "open" && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button className="secondary-button" onClick={() => resolveReport(report, "reviewed")} type="button">
+                            <ShieldCheck size={18} />
+                            標記已處理
+                          </button>
+                          <button className="secondary-button" onClick={() => resolveReport(report, "dismissed")} type="button">
+                            <X size={18} />
+                            駁回
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )) : <p className="text-sm text-[#7a7168]">目前沒有檢舉。</p>}
                 </div>
@@ -1807,6 +2161,11 @@ function PostList(props: {
   followerCount: (memberId: string) => number;
   togglePostHidden: (post: Post) => void;
   openImageViewer: (image: { src: string; alt: string }) => void;
+  toggleSavePost: (post: Post) => void;
+  isSaved: (postId: string) => boolean;
+  reviewsForUser: (memberId: string) => ExchangeReview[];
+  averageRating: (memberId: string) => string;
+  submitExchangeReview: (post: Post) => void;
 }) {
   if (!props.posts.length) {
     return <div className="panel mt-4 text-center text-[#7a7168]">目前沒有符合條件的交換貼文。</div>;
@@ -1826,7 +2185,9 @@ function PostList(props: {
               </button>
               <button className="min-w-0 flex-1 text-left" onClick={() => props.openPublicProfile(author.id)} type="button">
                 <p className="truncate font-black">{author.displayName}</p>
-                <p className="text-xs text-[#7a7168]">{post.category} · {post.status} · {props.followerCount(author.id)} 粉絲</p>
+                <p className="text-xs text-[#7a7168]">
+                  {post.category} · {post.status} · {props.followerCount(author.id)} 粉絲 · 信用 {props.averageRating(author.id)}
+                </p>
               </button>
               {!isOwner && (
                 <button className="mini-button" onClick={() => props.toggleFollow(author)} type="button">
@@ -1850,14 +2211,10 @@ function PostList(props: {
                   <textarea className="field min-h-24" value={props.editPostForm.content} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, content: event.target.value })} />
                   <div className="grid gap-3 sm:grid-cols-3">
                     <select className="field" value={props.editPostForm.category} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, category: event.target.value as Category })}>
-                      <option>CD</option>
-                      <option>照片小卡</option>
-                      <option>小物</option>
+                      {categories.map((item) => <option key={item}>{item}</option>)}
                     </select>
                     <select className="field" value={props.editPostForm.status} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, status: event.target.value as Status })}>
-                      <option>欲交換</option>
-                      <option>徵求</option>
-                      <option>已交換</option>
+                      {postStatuses.map((item) => <option key={item}>{item}</option>)}
                     </select>
                     <input className="field" value={props.editPostForm.tags} onChange={(event) => props.setEditPostForm({ ...props.editPostForm, tags: event.target.value })} />
                   </div>
@@ -1878,6 +2235,7 @@ function PostList(props: {
               )}
               <div className="flex flex-wrap gap-2">
                 {post.tags.map((tag) => <Badge key={tag}>#{tag}</Badge>)}
+                {["已完成", "已交換"].includes(post.status) && <Badge>可評價</Badge>}
               </div>
               <div className="flex flex-wrap gap-2">
                 {isOwner && (
@@ -1896,6 +2254,16 @@ function PostList(props: {
                   <Flag size={17} />
                   檢舉
                 </button>
+                <button className="action-button" onClick={() => props.toggleSavePost(post)} type="button">
+                  <Bookmark className={props.isSaved(post.id) ? "fill-[#315c4b] text-[#315c4b]" : ""} size={17} />
+                  {props.isSaved(post.id) ? "已收藏" : "收藏"}
+                </button>
+                {!isOwner && ["已完成", "已交換"].includes(post.status) && (
+                  <button className="action-button" onClick={() => props.submitExchangeReview(post)} type="button">
+                    <Star size={17} />
+                    交換評價
+                  </button>
+                )}
                 {props.currentUser.isAdmin && (
                   <button className="action-button" onClick={() => props.togglePostHidden(post)} type="button">
                     {post.isHidden ? <Eye size={17} /> : <EyeOff size={17} />}
@@ -1925,6 +2293,19 @@ function PostList(props: {
                 </button>
               </div>
               <div className="space-y-2">
+                {props.reviewsForUser(author.id).some((review) => review.postId === post.id) && (
+                  <div className="rounded-lg border border-[#e1d7cc] bg-white p-3 text-sm">
+                    <p className="font-bold text-[#315c4b]">此交換已有評價紀錄</p>
+                    {props.reviewsForUser(author.id).filter((review) => review.postId === post.id).slice(0, 2).map((review) => {
+                      const reviewer = memberById(props.members, review.reviewerId);
+                      return (
+                        <p className="mt-1 text-[#5f5750]" key={review.id}>
+                          {review.rating} 星 · {reviewer.displayName}{review.comment ? `：${review.comment}` : ""}
+                        </p>
+                      );
+                    })}
+                  </div>
+                )}
                 {post.comments.map((comment) => {
                   const commenter = memberById(props.members, comment.userId);
                   return (
@@ -2066,7 +2447,7 @@ function AuthPanel({
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-lg bg-[#f3eee7] px-2 py-3">
       <p className="font-black">{value}</p>
