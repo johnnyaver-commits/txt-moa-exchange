@@ -1484,7 +1484,7 @@ export default function HomePage() {
                 </button>
               );
             })}
-            {currentUser.isAdmin && (
+            {isAuthenticated && currentUser.isAdmin && (
               <button className={`nav-button ${activeView === "admin" ? "nav-button-active" : ""}`} onClick={() => setActiveView("admin")} type="button">
                 <ShieldCheck size={18} />
                 管理
@@ -1492,15 +1492,21 @@ export default function HomePage() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <button className="icon-button relative" onClick={() => setActiveView("notifications")} title="通知" type="button">
+            <button className="icon-button relative" onClick={() => setActiveView(isAuthenticated ? "notifications" : "profile")} title={isAuthenticated ? "通知" : "登入"} type="button">
               <Bell size={20} />
-              {unreadNotifications > 0 && (
+              {isAuthenticated && unreadNotifications > 0 && (
                 <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#b24731] px-1 text-[0.68rem] font-black text-white">
                   {unreadNotifications}
                 </span>
               )}
             </button>
-            <img alt={currentUser.displayName} className="h-10 w-10 rounded-full object-cover ring-2 ring-[#98b7a6]" src={currentUser.avatar} />
+            {isAuthenticated ? (
+              <img alt={currentUser.displayName} className="h-10 w-10 rounded-full object-cover ring-2 ring-[#98b7a6]" src={currentUser.avatar} />
+            ) : (
+              <button className="icon-button" onClick={() => setActiveView("profile")} title="會員登入" type="button">
+                <User size={20} />
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1508,19 +1514,32 @@ export default function HomePage() {
       <div className="mx-auto grid max-w-7xl gap-6 px-4 pb-24 pt-5 lg:grid-cols-[260px_1fr_310px]">
         <aside className="hidden lg:block">
           <section className="panel">
-            <div className="flex items-center gap-3">
-              <img alt={currentUser.displayName} className="h-14 w-14 rounded-full object-cover" src={currentUser.avatar} />
-              <div>
-                <p className="font-bold">{currentUser.displayName}</p>
-                <p className="text-sm text-[#7a7168]">@{currentUser.username}</p>
-              </div>
-            </div>
-            <p className="mt-4 text-sm leading-6 text-[#5f5750]">{currentUser.bio}</p>
-            <div className="mt-5 grid grid-cols-3 gap-2 text-center text-sm">
-              <Metric label="貼文" value={posts.filter((post) => post.userId === currentUserId).length} />
-              <Metric label="追蹤" value={followingCount(currentUserId)} />
-              <Metric label="粉絲" value={followerCount(currentUserId)} />
-            </div>
+            {isAuthenticated ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <img alt={currentUser.displayName} className="h-14 w-14 rounded-full object-cover" src={currentUser.avatar} />
+                  <div>
+                    <p className="font-bold">{currentUser.displayName}</p>
+                    <p className="text-sm text-[#7a7168]">@{currentUser.username}</p>
+                  </div>
+                </div>
+                <p className="mt-4 text-sm leading-6 text-[#5f5750]">{currentUser.bio}</p>
+                <div className="mt-5 grid grid-cols-3 gap-2 text-center text-sm">
+                  <Metric label="貼文" value={posts.filter((post) => post.userId === currentUserId).length} />
+                  <Metric label="追蹤" value={followingCount(currentUserId)} />
+                  <Metric label="粉絲" value={followerCount(currentUserId)} />
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="section-title">尚未登入</h2>
+                <p className="mt-3 text-sm leading-6 text-[#5f5750]">登入後可以發佈貼文、留言、收藏與私訊。</p>
+                <button className="primary-button mt-4 w-full" onClick={() => setActiveView("profile")} type="button">
+                  <User size={18} />
+                  會員登入
+                </button>
+              </>
+            )}
           </section>
           <section className="panel mt-4">
             <h2 className="section-title">雲端狀態</h2>
@@ -1558,7 +1577,7 @@ export default function HomePage() {
 
           {activeView === "feed" && (
             <>
-              <Hero currentUser={currentUser} setActiveView={setActiveView} />
+              <Hero currentUser={currentUser} isAuthenticated={isAuthenticated} setActiveView={setActiveView} />
               <PostList
                 addComment={addComment}
                 commentDrafts={commentDrafts}
@@ -2081,7 +2100,7 @@ export default function HomePage() {
             </section>
           )}
 
-          {activeView === "admin" && currentUser.isAdmin && (
+          {activeView === "admin" && isAuthenticated && currentUser.isAdmin && (
             <section className="panel">
               <h1 className="page-title">管理後台</h1>
               <div className="mt-5 grid gap-3 md:grid-cols-4">
@@ -2229,7 +2248,7 @@ export default function HomePage() {
   );
 }
 
-function Hero({ currentUser, setActiveView }: { currentUser: Member; setActiveView: (view: View) => void }) {
+function Hero({ currentUser, isAuthenticated, setActiveView }: { currentUser: Member; isAuthenticated: boolean; setActiveView: (view: View) => void }) {
   return (
     <section className="mb-5 overflow-hidden rounded-lg bg-[#1f1e1c] text-white">
       <div className="grid gap-0 md:grid-cols-[1.1fr_0.9fr]">
@@ -2251,11 +2270,18 @@ function Hero({ currentUser, setActiveView }: { currentUser: Member; setActiveVi
         <div className="relative min-h-72">
           <img alt="韓式收藏桌面" className="absolute inset-0 h-full w-full object-cover" src="https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&w=1100&q=80" />
           <div className="absolute bottom-4 left-4 right-4 rounded-lg bg-white/90 p-4 text-[#211f1d] shadow-xl backdrop-blur">
-            <p className="text-sm text-[#7a7168]">目前登入</p>
-            <div className="mt-2 flex items-center gap-3">
-              <img alt={currentUser.displayName} className="h-11 w-11 rounded-full object-cover" src={currentUser.avatar} />
-              <p className="font-black">{currentUser.displayName}</p>
-            </div>
+            <p className="text-sm text-[#7a7168]">{isAuthenticated ? "目前登入" : "會員狀態"}</p>
+            {isAuthenticated ? (
+              <div className="mt-2 flex items-center gap-3">
+                <img alt={currentUser.displayName} className="h-11 w-11 rounded-full object-cover" src={currentUser.avatar} />
+                <p className="font-black">{currentUser.displayName}</p>
+              </div>
+            ) : (
+              <button className="secondary-button mt-2" onClick={() => setActiveView("profile")} type="button">
+                <User size={18} />
+                尚未登入，前往登入
+              </button>
+            )}
           </div>
         </div>
       </div>
