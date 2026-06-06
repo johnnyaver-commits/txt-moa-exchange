@@ -219,8 +219,8 @@ const dmPolicyLabels: Record<DmPolicy, string> = {
 };
 const environmentNotice = () =>
   isSupabaseConfigured
-    ? `雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`
-    : "Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。";
+    ? `雲端同步已啟用${isCloudinaryConfigured ? "，圖片上傳服務已啟用。" : "。圖片服務尚未完成設定，圖片會暫存在此瀏覽器。"}`
+    : "本機示範模式：設定雲端服務後會自動切換為正式資料。";
 
 const seedMembers: Member[] = [
   {
@@ -661,7 +661,7 @@ export default function HomePage() {
     ]);
 
     if (profilesResult.error || postsResult.error || followsResult.error) {
-      setNotice("Supabase 已設定，但資料表尚未建立或 RLS 尚未允許讀取。請先執行 supabase/schema.sql。");
+      setNotice("雲端服務已設定，但資料尚未完成初始化或讀取權限尚未開啟。請聯絡系統管理員。");
       return;
     }
 
@@ -810,7 +810,7 @@ export default function HomePage() {
       setMembers((list) =>
         list.map((member) => (member.id === currentUserId ? { ...member, password: passwordForm.password } : member)),
       );
-      setNotice("Demo 密碼已更新。");
+      setNotice("示範模式密碼已更新。");
     }
 
     setPasswordForm({ password: "", confirmPassword: "" });
@@ -824,7 +824,7 @@ export default function HomePage() {
       return;
     }
     if (authMode === "forgot") {
-      setNotice("Demo 模式不支援寄送重設密碼信，請使用 Supabase 雲端模式。");
+      setNotice("示範模式不支援寄送重設密碼信，請使用正式服務。");
       return;
     }
     if (authMode === "login") {
@@ -833,7 +833,7 @@ export default function HomePage() {
         setCurrentUserId(found.id);
         setActiveView("feed");
       } else {
-        setNotice("Demo 帳號不存在，請用 README 的測試帳號或切到註冊。");
+        setNotice("示範帳號不存在，請確認測試帳號或切到註冊。");
       }
       return;
     }
@@ -859,9 +859,9 @@ export default function HomePage() {
     try {
       const imageUrl = await uploadImage(file);
       setPostForm((form) => ({ ...form, image: imageUrl }));
-      setNotice(isCloudinaryConfigured ? "圖片已上傳到 Cloudinary。" : "圖片已載入 demo 暫存。設定 Cloudinary 後會改為雲端圖片。");
+      setNotice(isCloudinaryConfigured ? "圖片已上傳。" : "圖片已載入暫存。正式圖片服務啟用後會改為雲端圖片。");
     } catch {
-      setNotice("圖片上傳失敗，請確認 Cloudinary upload preset 是否為 unsigned。");
+      setNotice("圖片上傳失敗，請聯絡系統管理員確認圖片服務設定。");
     } finally {
       setUploading(false);
     }
@@ -874,9 +874,9 @@ export default function HomePage() {
     try {
       const imageUrl = await uploadImage(file);
       setProfileForm((form) => ({ ...form, avatar: imageUrl }));
-      setNotice(isCloudinaryConfigured ? "頭像已上傳到 Cloudinary，請按儲存資料完成更新。" : "頭像已載入預覽，請按儲存資料完成更新。");
+      setNotice(isCloudinaryConfigured ? "頭像已上傳，請按儲存資料完成更新。" : "頭像已載入預覽，請按儲存資料完成更新。");
     } catch {
-      setNotice("頭像上傳失敗，請確認 Cloudinary upload preset 是否為 unsigned。");
+      setNotice("頭像上傳失敗，請聯絡系統管理員確認圖片服務設定。");
     } finally {
       setProfileUploading(false);
       event.target.value = "";
@@ -1091,7 +1091,7 @@ export default function HomePage() {
 
     if (backendEnabled && supabase) {
       if (!cloudUserId) {
-        setNotice("Supabase 雲端模式已啟用。請先登入會員，再發佈貼文。");
+        setNotice("雲端同步已啟用。請先登入會員，再發佈貼文。");
         return;
       }
       const { error } = await supabase.from("posts").insert({
@@ -1543,9 +1543,9 @@ export default function HomePage() {
             )}
           </section>
           <section className="panel mt-4">
-            <h2 className="section-title">雲端狀態</h2>
-            <StatusRow icon={Database} active={backendEnabled} label={backendEnabled ? "Supabase 已連線" : "Supabase 未設定"} />
-            <StatusRow icon={Cloud} active={isCloudinaryConfigured} label={isCloudinaryConfigured ? "Cloudinary 已啟用" : "Cloudinary 未設定"} />
+            <h2 className="section-title">服務狀態</h2>
+            <StatusRow icon={Database} active={backendEnabled} label={backendEnabled ? "雲端同步已啟用" : "雲端同步未啟用"} />
+            <StatusRow icon={Cloud} active={isCloudinaryConfigured} label={isCloudinaryConfigured ? "圖片服務已啟用" : "圖片服務未啟用"} />
           </section>
           <section className="panel mt-4">
             <h2 className="section-title">交換分類</h2>
@@ -1832,7 +1832,7 @@ export default function HomePage() {
                       <div className="mt-4 flex flex-wrap gap-2">
                         <Badge>公開帳號</Badge>
                         <Badge>不開放金流</Badge>
-                        <Badge>{backendEnabled ? "雲端同步" : "Demo 暫存"}</Badge>
+                        <Badge>{backendEnabled ? "雲端同步" : "本機暫存"}</Badge>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -2104,7 +2104,7 @@ export default function HomePage() {
                 <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
                   <h2 className="section-title">維運與備份</h2>
                   <p className="mt-2 leading-7 text-[#4c4640]">
-                    管理員應定期檢查檢舉內容、AI 巡查建議與 Supabase 備份狀態。建議至少每週匯出 Supabase 資料，並確認 Cloudinary 圖片用量沒有異常增加。
+                    管理員應定期檢查檢舉內容、AI 巡查建議與雲端資料備份狀態。建議至少每週匯出資料，並確認圖片用量沒有異常增加。
                   </p>
                 </div>
               </div>
@@ -2164,9 +2164,9 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
-                  <h2 className="section-title">Supabase 定期備份</h2>
+                  <h2 className="section-title">雲端資料定期備份</h2>
                   <p className="mt-2 text-sm leading-6 text-[#5f5750]">
-                    建議每週在 Supabase 後台匯出資料，並保留 profiles、posts、comments、messages、reports、notifications 等主要表。備份後抽查一次還原流程。
+                    建議每週在雲端資料後台匯出資料，並保留會員、貼文、留言、私訊、檢舉、通知等主要資料。備份後抽查一次還原流程。
                   </p>
                   <div className="mt-4 rounded-lg bg-[#f3eee7] p-3 text-sm font-bold text-[#4c4640]">
                     備份頻率：每週一次；重大改版前額外備份一次。
