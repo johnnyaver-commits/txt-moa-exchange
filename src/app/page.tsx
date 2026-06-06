@@ -192,6 +192,7 @@ type NotificationItem = {
   isRead: boolean;
   createdAt: string;
   postId: string | null;
+  messageId: string | null;
 };
 
 type NotificationRow = {
@@ -203,6 +204,7 @@ type NotificationRow = {
   is_read: boolean;
   created_at: string;
   post_id: string | null;
+  message_id: string | null;
 };
 
 const now = () => new Date().toISOString();
@@ -401,7 +403,17 @@ const rowToNotification = (row: NotificationRow): NotificationItem => ({
   isRead: row.is_read,
   createdAt: row.created_at,
   postId: row.post_id,
+  messageId: row.message_id,
 });
+
+const latestConversationTarget = (list: ChatMessage[], userId: string, memberList: Member[]) => {
+  const memberIds = new Set(memberList.map((member) => member.id));
+  return list
+    .filter((message) => message.from === userId || message.to === userId)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .map((message) => (message.from === userId ? message.to : message.from))
+    .find((memberId) => memberIds.has(memberId) && memberId !== userId);
+};
 
 export default function HomePage() {
   const [members, setMembers] = useState<Member[]>(seedMembers);
@@ -684,7 +696,14 @@ export default function HomePage() {
         .from("messages")
         .select("id,sender_id,receiver_id,content,post_id,read_at,created_at")
         .order("created_at", { ascending: true });
-      if (!messagesError) setMessages(((messageRows || []) as MessageRow[]).map(rowToMessage));
+      if (!messagesError) {
+        const cloudMessages = ((messageRows || []) as MessageRow[]).map(rowToMessage);
+        setMessages(cloudMessages);
+        const latestTarget = latestConversationTarget(cloudMessages, sessionUserId, cloudMembers);
+        const targetExists = cloudMembers.some((member) => member.id === chatTarget && member.id !== sessionUserId);
+        const targetHasConversation = cloudMessages.some((message) => [message.from, message.to].includes(sessionUserId) && [message.from, message.to].includes(chatTarget));
+        if (latestTarget && (!targetExists || chatTarget === "moa-sora" || !targetHasConversation)) setChatTarget(latestTarget);
+      }
       const { data: reportRows, error: reportsError } = await supabase
         .from("reports")
         .select("id,reporter_id,category,reason,status,post_id,comment_id,resolution,created_at")
@@ -702,7 +721,7 @@ export default function HomePage() {
       if (!blockError) setUserBlocks(((blockRows || []) as UserBlockRow[]).map(rowToUserBlock));
       const { data: notificationRows, error: notificationsError } = await supabase
         .from("notifications")
-        .select("id,user_id,actor_id,type,content,is_read,created_at,post_id")
+        .select("id,user_id,actor_id,type,content,is_read,created_at,post_id,message_id")
         .order("created_at", { ascending: false });
       if (!notificationsError) setNotifications(((notificationRows || []) as NotificationRow[]).map(rowToNotification));
     } else {
@@ -909,7 +928,17 @@ export default function HomePage() {
       return;
     }
     setNotifications((list) => [
-      { id: newId(), userId: input.userId, actorId: currentUserId, type: input.type, content: input.content, isRead: false, createdAt: now(), postId: input.postId || null },
+      {
+        id: newId(),
+        userId: input.userId,
+        actorId: currentUserId,
+        type: input.type,
+        content: input.content,
+        isRead: false,
+        createdAt: now(),
+        postId: input.postId || null,
+        messageId: input.messageId || null,
+      },
       ...list,
     ]);
   }
@@ -1066,6 +1095,16 @@ export default function HomePage() {
       return;
     }
     setNotifications((list) => list.map((notification) => ({ ...notification, isRead: true })));
+  }
+
+  function openNotification(notification: NotificationItem) {
+    if (notification.type === "message" && notification.actorId) {
+      openChat(notification.actorId);
+      return;
+    }
+    if (notification.postId) {
+      setActiveView("feed");
+    }
   }
 
   async function createPost(event: FormEvent<HTMLFormElement>) {
@@ -1424,12 +1463,16 @@ export default function HomePage() {
         setNotice("請先登入會員，再傳送私訊。");
         return;
       }
-      const { error } = await supabase.from("messages").insert({ sender_id: cloudUserId, receiver_id: chatTarget, content: chatText.trim(), post_id: chatPostId });
+      const { data: insertedMessage, error } = await supabase
+        .from("messages")
+        .insert({ sender_id: cloudUserId, receiver_id: chatTarget, content: chatText.trim(), post_id: chatPostId })
+        .select("id")
+        .single();
       if (error) {
         setNotice(error.message);
         return;
       }
-      await createNotification({ userId: chatTarget, type: "message", content: `${currentUser.displayName} 傳了新私訊給你。` });
+      await createNotification({ userId: chatTarget, type: "message", content: `${currentUser.displayName} 傳了新私訊給你。`, messageId: insertedMessage?.id });
       await loadCloudData();
     } else {
       setMessages((list) => [...list, nextMessage]);
@@ -2127,7 +2170,12 @@ export default function HomePage() {
                 {notifications.length ? notifications.map((notification) => {
                   const actor = notification.actorId ? memberById(members, notification.actorId) : null;
                   return (
-                    <div className={`rounded-lg border border-[#e1d7cc] bg-white p-4 ${notification.isRead ? "opacity-70" : ""}`} key={notification.id}>
+                    <button
+                      className={`w-full rounded-lg border border-[#e1d7cc] bg-white p-4 text-left ${notification.isRead ? "opacity-70" : ""}`}
+                      key={notification.id}
+                      onClick={() => openNotification(notification)}
+                      type="button"
+                    >
                       <div className="flex items-start gap-3">
                         {actor && <img alt={actor.displayName} className="h-10 w-10 rounded-full object-cover" src={actor.avatar} />}
                         <div className="min-w-0 flex-1">
@@ -2136,7 +2184,7 @@ export default function HomePage() {
                         </div>
                         {!notification.isRead && <Badge>未讀</Badge>}
                       </div>
-                    </div>
+                    </button>
                   );
                 }) : <p className="text-sm text-[#7a7168]">目前沒有通知。</p>}
               </div>
