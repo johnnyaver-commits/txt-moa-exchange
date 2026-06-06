@@ -415,6 +415,11 @@ create policy "Users can create reports"
   on public.reports for insert
   with check (auth.uid() = reporter_id and not public.is_blocked(auth.uid()));
 
+drop policy if exists "Users can read own reports" on public.reports;
+create policy "Users can read own reports"
+  on public.reports for select
+  using (auth.uid() = reporter_id);
+
 drop policy if exists "Admins can read reports" on public.reports;
 create policy "Admins can read reports"
   on public.reports for select
