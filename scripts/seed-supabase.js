@@ -33,34 +33,32 @@ async function must(label, promise) {
 
 async function main() {
   const env = readEnv(".env.local");
-  const client = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Missing SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  const client = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
 
   const users = [
     {
-      username: "admin",
-      password: "admin123",
-      display_name: "MOA 管理員",
-      bio: "審核交換貼文、處理檢舉與維護社群安全。",
-      avatar_url: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=240&q=80",
-      is_admin: true,
-    },
-    {
-      username: "yeonbin",
+      email: "yeonbin@example.com",
       password: "txt123",
+      username: "yeonbin",
       display_name: "연빈收藏室",
       bio: "主收 TXT CD、藍色系小卡，可台北面交。",
       avatar_url: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=240&q=80",
-      is_admin: false,
     },
     {
-      username: "sora",
+      email: "sora@example.com",
       password: "txt123",
+      username: "sora",
       display_name: "Sora MOA",
       bio: "喜歡韓系手帳與演唱會小物交換。",
       avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=240&q=80",
-      is_admin: false,
     },
   ];
 
@@ -68,18 +66,16 @@ async function main() {
   const ids = {};
 
   for (const user of users) {
-    const email = `${user.username}@moa.local`;
-    let authUser = listedUsers.users.find((item) => item.email === email);
+    let authUser = listedUsers.users.find((item) => item.email === user.email);
 
     if (!authUser) {
       const { data } = await must(
-        `create user ${email}`,
+        `create user ${user.email}`,
         client.auth.admin.createUser({
-          email,
+          email: user.email,
           password: user.password,
           email_confirm: true,
           user_metadata: {
-            username: user.username,
             display_name: user.display_name,
           },
         }),
@@ -96,7 +92,7 @@ async function main() {
         display_name: user.display_name,
         bio: user.bio,
         avatar_url: user.avatar_url,
-        is_admin: user.is_admin,
+        is_admin: false,
       }),
     );
   }
@@ -127,11 +123,11 @@ async function main() {
             image_url: "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80",
           },
           {
-            user_id: ids.admin,
-            title: "交換守則：請保留聊天紀錄與出貨照片",
-            content: "平台不提供金流，只作為 TXT 周邊交換分享。請勿公開個資，遇到可疑內容請檢舉。",
+            user_id: ids.yeonbin,
+            title: "交換守則：平台不提供金流",
+            content: "平台只提供 TXT 周邊交換分享，不處理付款、不代收款，也不負責任何付款交易。請保留聊天紀錄與出貨照片，勿公開地址、付款資訊或身分證件。",
             category: "照片小卡",
-            status: "已交換",
+            status: "已完成",
             tags: ["公告", "安全交換", "MOA"],
             image_url: "https://images.unsplash.com/photo-1517142089942-ba376ce32a2e?auto=format&fit=crop&w=900&q=80",
           },
@@ -143,7 +139,7 @@ async function main() {
     console.log(`Skipped posts seed; ${count} posts already exist`);
   }
 
-  console.log("Supabase demo users ready");
+  console.log("Supabase demo users ready without demo admin");
 }
 
 main().catch((error) => {

@@ -37,7 +37,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 type Category = "CD" | "照片小卡" | "小物";
 type Status = "欲交換" | "徵求" | "洽談中" | "已保留" | "已完成" | "取消交換" | "已交換";
 type DmPolicy = "everyone" | "following" | "mutual";
-type View = "feed" | "search" | "create" | "messages" | "profile" | "public-profile" | "notifications" | "admin";
+type View = "feed" | "search" | "create" | "messages" | "profile" | "public-profile" | "notifications" | "admin" | "policy";
 type AuthMode = "login" | "register" | "forgot";
 
 type Member = {
@@ -220,19 +220,6 @@ const dmPolicyLabels: Record<DmPolicy, string> = {
 
 const seedMembers: Member[] = [
   {
-    id: "moa-admin",
-    username: "admin",
-    password: "admin123",
-    displayName: "MOA 管理員",
-    bio: "審核交換貼文、處理檢舉與維護社群安全。",
-  avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=240&q=80",
-  isAdmin: true,
-  isBlocked: false,
-  dmPolicy: "everyone",
-  hidePublicPosts: false,
-  hidePublicComments: false,
-  },
-  {
     id: "yeonbin",
     username: "yeonbin",
     password: "txt123",
@@ -279,9 +266,9 @@ const seedPosts: Post[] = [
   },
   {
     id: "post-3",
-    userId: "moa-admin",
-    title: "交換守則：請保留聊天紀錄與出貨照片",
-    content: "平台不提供金流，只作為 TXT 周邊交換分享。請勿公開個資，遇到可疑內容請檢舉。",
+    userId: "yeonbin",
+    title: "交換守則：平台不提供金流",
+    content: "平台只提供 TXT 周邊交換分享，不處理付款、不代收款，也不負責任何付款交易。請保留聊天紀錄與出貨照片，勿公開地址、付款資訊或身分證件。",
     category: "照片小卡",
     status: "已交換",
     tags: ["公告", "安全交換", "MOA"],
@@ -603,6 +590,15 @@ export default function HomePage() {
     if (!list.length) return "尚無";
     return (list.reduce((sum, review) => sum + review.rating, 0) / list.length).toFixed(1);
   };
+  const aiRiskScore = (report: Report) => {
+    const text = `${report.category} ${report.reason}`.toLowerCase();
+    let score = report.status === "open" ? 1 : 0;
+    if (["詐騙疑慮", "不實廣告"].includes(report.category)) score += 2;
+    if (/(付款|匯款|轉帳|line|地址|身分證|證件|詐騙|廣告|代購|抽獎)/i.test(text)) score += 2;
+    if (report.postId && reports.filter((item) => item.postId === report.postId && item.status === "open").length >= 2) score += 2;
+    return score;
+  };
+  const highRiskReports = reports.filter((report) => report.status === "open" && aiRiskScore(report) >= 3);
   const conversationMessages = messages.filter((message) => [message.from, message.to].includes(currentUserId) && [message.from, message.to].includes(chatTarget));
   const chatPartner = memberById(members, chatTarget);
   const chatPost = chatPostId ? posts.find((post) => post.id === chatPostId) || null : null;
@@ -1458,6 +1454,7 @@ export default function HomePage() {
     { key: "search", label: "搜尋", icon: Search },
     { key: "create", label: "發佈", icon: Plus },
     { key: "messages", label: "私訊", icon: MessageCircle },
+    { key: "policy", label: "規範", icon: ShieldCheck },
     { key: "profile", label: "我的", icon: User },
   ] as const;
 
@@ -1578,6 +1575,7 @@ export default function HomePage() {
           {activeView === "feed" && (
             <>
               <Hero currentUser={currentUser} isAuthenticated={isAuthenticated} setActiveView={setActiveView} />
+              <SafetyNotice />
               <PostList
                 addComment={addComment}
                 commentDrafts={commentDrafts}
@@ -2068,6 +2066,47 @@ export default function HomePage() {
             </section>
           )}
 
+          {activeView === "policy" && (
+            <section className="panel">
+              <h1 className="page-title">使用規範 / 隱私政策</h1>
+              <div className="mt-5 grid gap-4">
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">平台定位</h2>
+                  <p className="mt-2 leading-7 text-[#4c4640]">
+                    本平台只提供 TXT 周邊交換分享、留言與私訊聯繫，不提供金流、不代收款、不保管款項，也不負責任何付款交易或私下買賣糾紛。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">交換安全提醒</h2>
+                  <ul className="mt-2 list-disc space-y-2 pl-5 text-[#4c4640]">
+                    <li>不要公開地址、電話、付款資訊、身分證件或其他個資。</li>
+                    <li>請保留聊天紀錄、商品照片、出貨照片與寄件憑證。</li>
+                    <li>遇到要求先付款、代購、抽獎、外部連結或廣告導流，請立即檢舉。</li>
+                    <li>面交請選擇公開、安全、有人潮的地點。</li>
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">內容規範</h2>
+                  <p className="mt-2 leading-7 text-[#4c4640]">
+                    禁止詐騙、不實廣告、洗版、冒名、散布他人個資、仇恨或騷擾內容。管理員可依檢舉或巡查結果隱藏貼文、封鎖會員或駁回檢舉。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">隱私政策</h2>
+                  <p className="mt-2 leading-7 text-[#4c4640]">
+                    註冊與登入只使用 E-mail。公開頁只顯示暱稱、公開 username、頭像、簡介與你選擇公開的貼文/留言紀錄。你可在個人資料中限制陌生人私訊，並隱藏自己的貼文或留言紀錄。
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">維運與備份</h2>
+                  <p className="mt-2 leading-7 text-[#4c4640]">
+                    管理員應定期檢查檢舉內容、AI 巡查建議與 Supabase 備份狀態。建議至少每週匯出 Supabase 資料，並確認 Cloudinary 圖片用量沒有異常增加。
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
           {activeView === "notifications" && (
             <section className="panel">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2104,10 +2143,31 @@ export default function HomePage() {
             <section className="panel">
               <h1 className="page-title">管理後台</h1>
               <div className="mt-5 grid gap-3 md:grid-cols-4">
-                <AdminCard label="待審核貼文" value="3" />
+                <AdminCard label="待審核貼文" value={posts.filter((post) => post.isHidden).length.toString()} />
                 <AdminCard label="待處理檢舉" value={reports.filter((report) => report.status === "open").length.toString()} />
                 <AdminCard label="活躍會員" value={members.filter((member) => !member.isBlocked).length.toString()} />
                 <AdminCard label="已封鎖會員" value={members.filter((member) => member.isBlocked).length.toString()} />
+              </div>
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">AI 管理員巡查</h2>
+                  <p className="mt-2 text-sm leading-6 text-[#5f5750]">
+                    系統會以規則式 AI 風險評分定期查看檢舉內容，優先標出詐騙疑慮、不實廣告、付款導流與大量檢舉貼文。正式管理員仍需人工確認後處理。
+                  </p>
+                  <div className="mt-4 rounded-lg bg-[#f3eee7] p-3">
+                    <p className="font-black text-[#9a4e40]">{highRiskReports.length} 件高風險檢舉需優先查看</p>
+                    <p className="mt-1 text-xs text-[#7a7168]">建議每日固定檢查；大量 open 檢舉貼文已會自動隱藏。</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[#e1d7cc] bg-white p-4">
+                  <h2 className="section-title">Supabase 定期備份</h2>
+                  <p className="mt-2 text-sm leading-6 text-[#5f5750]">
+                    建議每週在 Supabase 後台匯出資料，並保留 profiles、posts、comments、messages、reports、notifications 等主要表。備份後抽查一次還原流程。
+                  </p>
+                  <div className="mt-4 rounded-lg bg-[#f3eee7] p-3 text-sm font-bold text-[#4c4640]">
+                    備份頻率：每週一次；重大改版前額外備份一次。
+                  </div>
+                </div>
               </div>
               <div className="mt-6">
                 <h2 className="section-title">會員權限</h2>
@@ -2140,8 +2200,9 @@ export default function HomePage() {
                 <h2 className="section-title">檢舉列表</h2>
                 <div className="mt-3 space-y-3">
                   {reports.length ? reports.map((report) => (
-                    <div className="rounded-lg border border-[#e1d7cc] bg-white p-4" key={report.id}>
+                    <div className={`rounded-lg border bg-white p-4 ${aiRiskScore(report) >= 3 && report.status === "open" ? "border-[#b24731]" : "border-[#e1d7cc]"}`} key={report.id}>
                       <p className="font-bold">{report.postId ? "貼文檢舉" : "留言檢舉"} · {report.category} · {report.status}</p>
+                      {aiRiskScore(report) >= 3 && report.status === "open" && <Badge>AI 高風險</Badge>}
                       <p className="mt-1 text-sm text-[#5f5750]">{report.reason}</p>
                       {report.resolution && <p className="mt-1 text-sm font-bold text-[#315c4b]">處理結果：{report.resolution}</p>}
                       <p className="mt-1 text-xs text-[#7a7168]">{new Date(report.createdAt).toLocaleString("zh-TW")}</p>
@@ -2231,7 +2292,7 @@ export default function HomePage() {
         </aside>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-[#e4d9cf] bg-[#fffaf4] px-2 py-2 shadow-[0_-8px_20px_rgba(60,45,30,0.08)] md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-[#e4d9cf] bg-[#fffaf4] px-2 py-2 shadow-[0_-8px_20px_rgba(60,45,30,0.08)] md:hidden">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -2283,6 +2344,22 @@ function Hero({ currentUser, isAuthenticated, setActiveView }: { currentUser: Me
               </button>
             )}
           </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SafetyNotice() {
+  return (
+    <section className="mb-5 rounded-lg border border-[#d8ccc0] bg-[#fffaf4] p-4 text-sm text-[#4c4640]">
+      <div className="flex items-start gap-3">
+        <ShieldCheck className="mt-0.5 shrink-0 text-[#315c4b]" size={20} />
+        <div>
+          <p className="font-black">平台不提供金流、不負責付款交易。</p>
+          <p className="mt-1 leading-6">
+            這裡只提供 TXT 周邊交換分享。請不要公開地址、付款資訊、身分證件；遇到不實廣告、代購、抽獎或可疑付款要求，請立即檢舉。
+          </p>
         </div>
       </div>
     </section>
@@ -2561,6 +2638,7 @@ function AuthPanel({
 
   return (
     <form className="mt-4 grid gap-3" onSubmit={onAuth}>
+      <SafetyNotice />
       <div className="grid grid-cols-2 rounded-lg bg-[#ece3d8] p-1 text-sm font-bold">
         <button className={`rounded-md py-2 ${authMode === "login" ? "bg-white" : ""}`} onClick={() => setAuthMode("login")} type="button">
           登入
