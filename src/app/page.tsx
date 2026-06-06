@@ -217,6 +217,10 @@ const dmPolicyLabels: Record<DmPolicy, string> = {
   following: "只允許我追蹤的人",
   mutual: "只允許互追的人",
 };
+const environmentNotice = () =>
+  isSupabaseConfigured
+    ? `雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`
+    : "Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。";
 
 const seedMembers: Member[] = [
   {
@@ -455,7 +459,7 @@ export default function HomePage() {
   const [editingPassword, setEditingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [passwordUpdating, setPasswordUpdating] = useState(false);
-  const [notice, setNotice] = useState("Demo 模式：設定 Supabase 與 Cloudinary 環境變數後會自動切換為雲端資料。");
+  const [notice, setNotice] = useState(environmentNotice);
   const [uploading, setUploading] = useState(false);
   const [profileUploading, setProfileUploading] = useState(false);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
@@ -669,13 +673,13 @@ export default function HomePage() {
     setPosts(cloudPosts.length ? cloudPosts : seedPosts);
     setFollows(cloudFollows);
     setExchangeReviews(cloudReviews);
+    setNotice(environmentNotice());
 
     const sessionUserId = sessionResult.data.session?.user.id;
     if (sessionUserId) {
       setCurrentUserId(sessionUserId);
       const firstChatTarget = cloudMembers.find((member) => member.id !== sessionUserId)?.id;
       if (firstChatTarget && !cloudMembers.some((member) => member.id === chatTarget)) setChatTarget(firstChatTarget);
-      setNotice(`雲端模式：Supabase 已連線${isCloudinaryConfigured ? "，Cloudinary 圖片上傳已啟用。" : "。未設定 Cloudinary 時圖片會留在瀏覽器暫存。"}`);
       const { data: messageRows, error: messagesError } = await supabase
         .from("messages")
         .select("id,sender_id,receiver_id,content,post_id,read_at,created_at")
