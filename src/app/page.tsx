@@ -554,16 +554,33 @@ export default function HomePage() {
 
   useEffect(() => {
     if (activeView !== "messages" || !chatTarget) return;
-    const unreadIds = messages.filter((message) => message.from === chatTarget && message.to === currentUserId && !message.readAt).map((message) => message.id);
+    const activeUserId = backendEnabled ? cloudUserId : currentUserId;
+    if (!activeUserId) return;
+    const unreadIds = messages.filter((message) => message.from === chatTarget && message.to === activeUserId && !message.readAt).map((message) => message.id);
     if (!unreadIds.length) return;
     const readAt = now();
     if (backendEnabled && supabase) {
-      void supabase.from("messages").update({ read_at: readAt }).in("id", unreadIds);
+      void (async () => {
+        const { error } = await supabase
+          .from("messages")
+          .update({ read_at: readAt })
+          .eq("receiver_id", activeUserId)
+          .eq("sender_id", chatTarget)
+          .is("read_at", null)
+          .in("id", unreadIds);
+        if (error) {
+          setNotice(error.message);
+          return;
+        }
+        setMessages((list) => list.map((message) => (unreadIds.includes(message.id) ? { ...message, readAt } : message)));
+        await loadCloudData();
+      })();
+      return;
     }
     queueMicrotask(() => {
       setMessages((list) => list.map((message) => (unreadIds.includes(message.id) ? { ...message, readAt } : message)));
     });
-  }, [activeView, backendEnabled, chatTarget, currentUserId, messages]);
+  }, [activeView, backendEnabled, chatTarget, cloudUserId, currentUserId, messages]);
 
   const currentUser = memberById(members, currentUserId);
   const mustLoginForCloud = backendEnabled && !cloudUserId;
