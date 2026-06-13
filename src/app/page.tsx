@@ -805,14 +805,25 @@ export default function HomePage() {
       return;
     }
 
+    if (!data.session) {
+      setNotice("註冊成功，請先到信箱收驗證信，完成驗證後再登入。");
+      setAuthForm({ email: "", password: "", displayName: "" });
+      setAuthMode("login");
+      return;
+    }
+
     const publicUsername = publicUsernameFromEmail(email, data.user.id);
-    await supabase.from("profiles").upsert({
+    const { error: profileError } = await supabase.from("profiles").upsert({
       id: data.user.id,
       username: publicUsername,
       display_name: authForm.displayName || email.split("@")[0],
       bio: "新加入的 MOA，正在整理 TXT 收藏。",
       avatar_url: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(publicUsername)}`,
     });
+    if (profileError) {
+      setNotice(profileError.message);
+      return;
+    }
     setCloudUserId(data.user.id);
     setCurrentUserId(data.user.id);
     await loadCloudData();
